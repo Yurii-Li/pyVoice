@@ -50,8 +50,14 @@ def build_exe():
     shutil.rmtree("build", ignore_errors=True)
     shutil.rmtree("dist", ignore_errors=True)
     
+    # Автоматично використовуємо локальний .venv Python, якщо він існує
+    python_exe = sys.executable
+    venv_python = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv", "Scripts", "python.exe")
+    if os.path.exists(venv_python):
+        python_exe = venv_python
+    
     cmd = [
-        sys.executable, "-m", "PyInstaller",
+        python_exe, "-m", "PyInstaller",
         "--noconfirm",
         "--onefile",
         "--windowed",
