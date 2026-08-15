@@ -76,6 +76,8 @@ def build_exe():
         "--paths", src_path,
         "--add-data", f"{BIN_DIR}{os.pathsep}bin",
         "--collect-all", "edge_tts",
+        "--collect-all", "keyring",
+        "--collect-all", "platformdirs",
         entry_point
     ]
     

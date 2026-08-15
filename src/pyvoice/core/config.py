@@ -1,29 +1,20 @@
-import os
-import json
-from pyvoice.utils.paths import get_project_root
+import keyring
 
-CONFIG_FILENAME = "config.json"
+SERVICE_NAME = "PyVoiceAI_Gemini"
+API_KEY_NAME = "gemini_api_key"
 
-def get_config_file_path() -> str:
-    """Повертає шлях до config.json у кореневій папці"""
-    return os.path.join(get_project_root(), CONFIG_FILENAME)
+def load_api_key() -> str:
+    """Завантажує збережений API ключ із зашифрованого сховища Windows Keyring"""
+    try:
+        return keyring.get_password(SERVICE_NAME, API_KEY_NAME) or ""
+    except Exception:
+        return ""
 
-def load_app_config() -> dict:
-    """Завантажує налаштування з config.json"""
-    path = get_config_file_path()
-    if os.path.exists(path):
+def save_api_key(api_key: str) -> None:
+    """Зберігає API ключ у зашифроване сховище Windows Keyring (Credential Manager)"""
+    api_key = api_key.strip()
+    if api_key:
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            keyring.set_password(SERVICE_NAME, API_KEY_NAME, api_key)
         except Exception:
             pass
-    return {}
-
-def save_app_config(config_data: dict) -> None:
-    """Зберігає налаштування у config.json"""
-    path = get_config_file_path()
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass

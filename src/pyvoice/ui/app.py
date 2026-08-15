@@ -7,7 +7,7 @@ import json
 import webbrowser
 import datetime
 
-from pyvoice.core.config import load_app_config, save_app_config
+from pyvoice.core.config import load_api_key, save_api_key
 from pyvoice.core.gemini import analyze_video
 from pyvoice.core.pipeline import run_voiceover_pipeline
 from pyvoice.ui.log_viewer import LogViewerWindow
@@ -16,8 +16,16 @@ class PyVoiceApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PyVoice AI - Авто-Озвучка дій у відео зі стоп-кадрами")
-        self.geometry("780x740")
-        self.minsize(720, 650)
+        self.minsize(680, 520)
+        
+        # Центрування вікна на екрані з безпечними розмірами (не вилазить за панель завдань)
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        width = min(760, max(680, screen_w - 60))
+        height = min(680, max(520, screen_h - 90))
+        x = max(0, (screen_w - width) // 2)
+        y = max(0, (screen_h - height - 60) // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
         
         # Тема оформлення
         style = ttk.Style(self)
@@ -25,7 +33,7 @@ class PyVoiceApp(tk.Tk):
             style.theme_use('clam')
             
         # Змінні
-        self.api_key_var = tk.StringVar()
+        self.api_key_var = tk.StringVar(value=load_api_key())
         self.input_video_path = tk.StringVar()
         self.output_video_path = tk.StringVar()
         self.voice_var = tk.StringVar(value="uk-UA-OstapNeural")
@@ -43,45 +51,23 @@ class PyVoiceApp(tk.Tk):
         self.log_history = []
         self.log_window = None
         
-        self.load_config()
         self.create_widgets()
         
-    def load_config(self):
-        cfg = load_app_config()
-        self.api_key_var.set(cfg.get("gemini_api_key", ""))
-        self.voice_var.set(cfg.get("voice", "uk-UA-OstapNeural"))
-        self.style_var.set(cfg.get("style", "Детальний туторіал (з привітанням, поясненням суті та користі дій)"))
-        self.video_topic_var.set(cfg.get("video_topic", ""))
-        self.custom_notes_var.set(cfg.get("custom_notes", ""))
-        self.include_intro_var.set(cfg.get("include_intro", True))
-        self.explain_purpose_var.set(cfg.get("explain_purpose", True))
-        self.include_outro_var.set(cfg.get("include_outro", True))
-                
-    def save_config(self):
-        cfg = {
-            "gemini_api_key": self.api_key_var.get().strip(),
-            "voice": self.voice_var.get(),
-            "style": self.style_var.get(),
-            "video_topic": self.video_topic_var.get(),
-            "custom_notes": self.custom_notes_var.get(),
-            "include_intro": self.include_intro_var.get(),
-            "explain_purpose": self.explain_purpose_var.get(),
-            "include_outro": self.include_outro_var.get()
-        }
-        save_app_config(cfg)
+        # Автоматичне збереження API ключа при введенні / вставці
+        self.api_key_var.trace_add("write", lambda *a: save_api_key(self.api_key_var.get()))
 
     def open_api_key_url(self):
         webbrowser.open("https://aistudio.google.com/app/apikey")
 
     def create_widgets(self):
-        main_frame = ttk.Frame(self, padding="12")
+        main_frame = ttk.Frame(self, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
         # -------------------------------------------------------------
         # СЕКЦІЯ 1: Налаштування ШІ та Стилю озвучки
         # -------------------------------------------------------------
-        ai_group = ttk.LabelFrame(main_frame, text=" 1. Налаштування ШІ-Сценариста (Google Gemini Vision) ", padding="10")
-        ai_group.pack(fill=tk.X, pady=(0, 8))
+        ai_group = ttk.LabelFrame(main_frame, text=" 1. Налаштування ШІ-Сценариста (Google Gemini Vision) ", padding="8")
+        ai_group.pack(fill=tk.X, pady=(0, 6))
 
         # Рядок 0: API Key
         ttk.Label(ai_group, text="Gemini API Key:").grid(row=0, column=0, sticky="w", pady=2)
@@ -97,12 +83,12 @@ class PyVoiceApp(tk.Tk):
         ttk.Checkbutton(ai_group, text="Показати", variable=self.show_key_var, command=toggle_key_visibility).grid(row=0, column=3, padx=2)
 
         # Рядок 1: Тема / Контекст відео
-        ttk.Label(ai_group, text="Про що відео / Контекст:").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Label(ai_group, text="Про що відео / Контекст:").grid(row=1, column=0, sticky="w", pady=2)
         entry_topic = ttk.Entry(ai_group, textvariable=self.video_topic_var, width=45)
-        entry_topic.grid(row=1, column=1, columnspan=3, padx=5, pady=3, sticky="we")
+        entry_topic.grid(row=1, column=1, columnspan=3, padx=5, pady=2, sticky="we")
 
         # Рядок 2: Стиль коментатора
-        ttk.Label(ai_group, text="Стиль подачі:").grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Label(ai_group, text="Стиль подачі:").grid(row=2, column=0, sticky="w", pady=2)
         styles = [
             "Детальний туторіал (з привітанням, поясненням суті та користі дій)",
             "Блогерський розмовний стиль (живі емоції, динаміка, звернення до глядачів)",
@@ -111,28 +97,28 @@ class PyVoiceApp(tk.Tk):
             "Власний стиль"
         ]
         style_cb = ttk.Combobox(ai_group, textvariable=self.style_var, values=styles, state="normal", width=42)
-        style_cb.grid(row=2, column=1, columnspan=3, padx=5, pady=3, sticky="we")
+        style_cb.grid(row=2, column=1, columnspan=3, padx=5, pady=2, sticky="we")
 
         # Рядок 3: Додаткові опції (Чекбокси)
         opts_frame = ttk.Frame(ai_group)
-        opts_frame.grid(row=3, column=0, columnspan=4, sticky="we", pady=4)
+        opts_frame.grid(row=3, column=0, columnspan=4, sticky="we", pady=3)
         
         ttk.Checkbutton(opts_frame, text="👋 Привітання на початку (00:00)", variable=self.include_intro_var).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Checkbutton(opts_frame, text="💡 Пояснювати призначення та користь функцій", variable=self.explain_purpose_var).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Checkbutton(opts_frame, text="🏁 Підсумок у кінці", variable=self.include_outro_var).pack(side=tk.LEFT)
 
         # Рядок 4: Додаткові побажання
-        ttk.Label(ai_group, text="Додаткові побажання:").grid(row=4, column=0, sticky="w", pady=3)
+        ttk.Label(ai_group, text="Додаткові побажання:").grid(row=4, column=0, sticky="w", pady=2)
         entry_notes = ttk.Entry(ai_group, textvariable=self.custom_notes_var, width=45)
-        entry_notes.grid(row=4, column=1, columnspan=3, padx=5, pady=3, sticky="we")
+        entry_notes.grid(row=4, column=1, columnspan=3, padx=5, pady=2, sticky="we")
 
         ai_group.columnconfigure(1, weight=1)
 
         # -------------------------------------------------------------
         # СЕКЦІЯ 2: Відеофайли та Аналіз
         # -------------------------------------------------------------
-        video_group = ttk.LabelFrame(main_frame, text=" 2. Вибір відео та запуск ШІ-Аналізу ", padding="10")
-        video_group.pack(fill=tk.X, pady=(0, 8))
+        video_group = ttk.LabelFrame(main_frame, text=" 2. Вибір відео та запуск ШІ-Аналізу ", padding="8")
+        video_group.pack(fill=tk.X, pady=(0, 6))
 
         ttk.Label(video_group, text="Вхідне відео:").grid(row=0, column=0, sticky="w", pady=2)
         ttk.Entry(video_group, textvariable=self.input_video_path, width=45).grid(row=0, column=1, padx=5, pady=2, sticky="we")
@@ -143,15 +129,15 @@ class PyVoiceApp(tk.Tk):
             text="👁️ Проаналізувати дії у відео через ШІ (Скласти розгорнутий сценарій)", 
             command=self.start_ai_analysis
         )
-        self.btn_analyze.grid(row=1, column=0, columnspan=3, pady=(6, 2), sticky="we")
+        self.btn_analyze.grid(row=1, column=0, columnspan=3, pady=(5, 2), sticky="we")
 
         video_group.columnconfigure(1, weight=1)
 
         # -------------------------------------------------------------
         # СЕКЦІЯ 3: Редактор сценарію / таймкодів
         # -------------------------------------------------------------
-        script_group = ttk.LabelFrame(main_frame, text=" 3. Сценарій озвучки з таймкодами (можна редагувати перед монтажем) ", padding="10")
-        script_group.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        script_group = ttk.LabelFrame(main_frame, text=" 3. Сценарій озвучки з таймкодами (можна редагувати перед монтажем) ", padding="8")
+        script_group.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
 
         btn_toolbar = ttk.Frame(script_group)
         btn_toolbar.pack(fill=tk.X, pady=(0, 4))
@@ -160,14 +146,14 @@ class PyVoiceApp(tk.Tk):
         ttk.Button(btn_toolbar, text="💾 Зберегти JSON", command=self.save_json_file).pack(side=tk.LEFT)
         ttk.Label(btn_toolbar, text="Формат: [{\"start\": \"00:00\", \"text\": \"...\"}]", font=("Segoe UI", 8, "italic")).pack(side=tk.RIGHT)
 
-        self.script_text = tk.Text(script_group, height=8, wrap=tk.WORD, font=("Consolas", 10))
+        self.script_text = tk.Text(script_group, height=6, wrap=tk.WORD, font=("Consolas", 10))
         self.script_text.pack(fill=tk.BOTH, expand=True)
 
         # -------------------------------------------------------------
         # СЕКЦІЯ 4: Озвучка та Фінальний рендер
         # -------------------------------------------------------------
-        render_group = ttk.LabelFrame(main_frame, text=" 4. Озвучення та Синхронізація стоп-кадрів ", padding="10")
-        render_group.pack(fill=tk.X, pady=(0, 8))
+        render_group = ttk.LabelFrame(main_frame, text=" 4. Озвучення та Синхронізація стоп-кадрів ", padding="8")
+        render_group.pack(fill=tk.X, pady=(0, 6))
 
         ttk.Label(render_group, text="Голос диктора:").grid(row=0, column=0, sticky="w", pady=2)
         voices = ["uk-UA-OstapNeural (Чоловічий)", "uk-UA-PolinaNeural (Жіночий)"]
@@ -192,28 +178,24 @@ class PyVoiceApp(tk.Tk):
             text="🎬 Створити фінальне відео зі стоп-кадрами та озвучкою", 
             command=self.start_rendering
         )
-        self.btn_render.grid(row=2, column=0, columnspan=3, pady=(8, 2), sticky="we")
+        self.btn_render.grid(row=2, column=0, columnspan=3, pady=(6, 2), sticky="we")
 
         render_group.columnconfigure(1, weight=1)
 
         # -------------------------------------------------------------
         # СЕКЦІЯ 5: Інтерактивний Status Bar (UX/UI Friendly)
         # -------------------------------------------------------------
-        status_bar = ttk.Frame(main_frame, padding="6", relief="groove")
+        status_bar = ttk.Frame(main_frame, padding="5", relief="groove")
         status_bar.pack(fill=tk.X, side=tk.BOTTOM)
         
-        # Подвійний клік на статус відкриває вікно логів
         status_bar.bind("<Double-Button-1>", lambda e: self.open_log_window())
 
-        # Індикатор прогресу
-        self.progress_bar = ttk.Progressbar(status_bar, mode='indeterminate', length=120)
-        self.progress_bar.pack(side=tk.RIGHT, padx=(10, 0))
+        self.progress_bar = ttk.Progressbar(status_bar, mode='indeterminate', length=110)
+        self.progress_bar.pack(side=tk.RIGHT, padx=(8, 0))
 
-        # Кнопка відкриття логів
         btn_open_logs = ttk.Button(status_bar, text="📜 Журнал логів", command=self.open_log_window)
-        btn_open_logs.pack(side=tk.RIGHT, padx=(5, 0))
+        btn_open_logs.pack(side=tk.RIGHT, padx=(4, 0))
 
-        # Текст статусу
         self.status_label = ttk.Label(
             status_bar, 
             textvariable=self.status_var, 
@@ -224,7 +206,6 @@ class PyVoiceApp(tk.Tk):
         self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.status_label.bind("<Double-Button-1>", lambda e: self.open_log_window())
         
-        # Підказка
         hint_label = ttk.Label(
             status_bar, 
             text=" (двічі клікніть для деталей)", 
@@ -249,13 +230,11 @@ class PyVoiceApp(tk.Tk):
         self.log_history.append(full_entry)
         
         def _update():
-            # Оновлюємо рядок статусу (беремо чистий текст без зайвих переносів)
             clean_status = message.replace("\n", " ")
             if len(clean_status) > 70:
                 clean_status = clean_status[:67] + "..."
             self.status_var.set(clean_status)
             
-            # Якщо вікно логів відкрито — додаємо запис туди
             if self.log_window is not None and self.log_window.winfo_exists():
                 self.log_window.append_log(full_entry)
                 
@@ -333,7 +312,7 @@ class PyVoiceApp(tk.Tk):
             messagebox.showerror("Помилка", "Будь ласка, оберіть існуючий відеофайл спочатку!")
             return
 
-        self.save_config()
+        save_api_key(api_key)
         self.set_ui_busy(True)
         self.log_message("🚀 Початок Vision AI аналізу відео...")
 
@@ -400,7 +379,6 @@ class PyVoiceApp(tk.Tk):
             messagebox.showerror("Помилка JSON", f"Помилка у структурі сценарію:\n{str(e)}")
             return
 
-        self.save_config()
         self.set_ui_busy(True)
         self.log_message("🎬 Запуск озвучення та монтажу стоп-кадрів...")
 
