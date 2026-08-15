@@ -6,11 +6,14 @@ import os
 import json
 import webbrowser
 import datetime
+from typing import Optional
 
 from pyvoice.core.config import load_api_key, save_api_key
 from pyvoice.core.gemini import analyze_video
 from pyvoice.core.pipeline import run_voiceover_pipeline
 from pyvoice.ui.log_viewer import LogViewerWindow
+from pyvoice.ui.fallback_dialog import VoiceFallbackDialog
+from pyvoice.ui.script_editor import ScriptEditorWindow
 
 class PyVoiceApp(tk.Tk):
     def __init__(self):
@@ -18,7 +21,7 @@ class PyVoiceApp(tk.Tk):
         self.title("PyVoice AI - Авто-Озвучка дій у відео зі стоп-кадрами")
         self.minsize(680, 520)
         
-        # Центрування вікна на екрані з безпечними розмірами (не вилазить за панель завдань)
+        # Центрування вікна на екрані з безпечними розмірами
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
         width = min(760, max(680, screen_w - 60))
@@ -36,7 +39,9 @@ class PyVoiceApp(tk.Tk):
         self.api_key_var = tk.StringVar(value=load_api_key())
         self.input_video_path = tk.StringVar()
         self.output_video_path = tk.StringVar()
-        self.voice_var = tk.StringVar(value="uk-UA-OstapNeural")
+        
+        # Варіанти озвучки за замовчуванням
+        self.voice_var = tk.StringVar(value="Edge-TTS: Остап (🔥 Живий / Динамічний)")
         
         # Налаштування стилю та глибини озвучки
         self.video_topic_var = tk.StringVar()
@@ -142,12 +147,20 @@ class PyVoiceApp(tk.Tk):
         btn_toolbar = ttk.Frame(script_group)
         btn_toolbar.pack(fill=tk.X, pady=(0, 4))
         
+        btn_expand = ttk.Button(
+            btn_toolbar, 
+            text="⛶ Великий редактор", 
+            command=self.open_script_editor
+        )
+        btn_expand.pack(side=tk.LEFT, padx=(0, 5))
+
         ttk.Button(btn_toolbar, text="📂 Відкрити JSON", command=self.load_json_file).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(btn_toolbar, text="💾 Зберегти JSON", command=self.save_json_file).pack(side=tk.LEFT)
-        ttk.Label(btn_toolbar, text="Формат: [{\"start\": \"00:00\", \"text\": \"...\"}]", font=("Segoe UI", 8, "italic")).pack(side=tk.RIGHT)
+        ttk.Label(btn_toolbar, text="Формат: [{\"start\": \"00:00\", \"text\": \"...\"}] (2 кліки для збільшення)", font=("Segoe UI", 8, "italic")).pack(side=tk.RIGHT)
 
         self.script_text = tk.Text(script_group, height=6, wrap=tk.WORD, font=("Consolas", 10))
         self.script_text.pack(fill=tk.BOTH, expand=True)
+        self.script_text.bind("<Double-Button-1>", lambda e: self.open_script_editor())
 
         # -------------------------------------------------------------
         # СЕКЦІЯ 4: Озвучка та Фінальний рендер
@@ -155,19 +168,21 @@ class PyVoiceApp(tk.Tk):
         render_group = ttk.LabelFrame(main_frame, text=" 4. Озвучення та Синхронізація стоп-кадрів ", padding="8")
         render_group.pack(fill=tk.X, pady=(0, 6))
 
-        ttk.Label(render_group, text="Голос диктора:").grid(row=0, column=0, sticky="w", pady=2)
-        voices = ["uk-UA-OstapNeural (Чоловічий)", "uk-UA-PolinaNeural (Жіночий)"]
-        self.voice_display_var = tk.StringVar(value=voices[0] if "Ostap" in self.voice_var.get() else voices[1])
+        ttk.Label(render_group, text="Голос та Рушій:").grid(row=0, column=0, sticky="w", pady=2)
+        voices = [
+            "Edge-TTS: Остап (🔥 Живий / Динамічний)",
+            "Edge-TTS: Поліна (🔥 Жива / Динамічна)",
+            "Edge-TTS: Остап (Базовий / Швидкий)",
+            "Edge-TTS: Поліна (Базова / Швидка)",
+            "Google Gemini AI: Puck (🌟 Емоційний ШІ-Диктор)",
+            "Google Gemini AI: Aoede (🌟 Емоційна ШІ-Дикторка)",
+            "Google Gemini AI: Charon (🌟 Глибокий ШІ-Голос)",
+            "Google Gemini AI: Kore (🌟 Чітка ШІ-Дикторка)",
+            "Google Gemini AI: Fenrir (🌟 Впевнений ШІ-Голос)"
+        ]
         
-        def on_voice_change(e=None):
-            if "Ostap" in self.voice_display_var.get():
-                self.voice_var.set("uk-UA-OstapNeural")
-            else:
-                self.voice_var.set("uk-UA-PolinaNeural")
-        
-        voice_cb = ttk.Combobox(render_group, textvariable=self.voice_display_var, values=voices, state="readonly", width=30)
-        voice_cb.grid(row=0, column=1, padx=5, pady=2, sticky="w")
-        voice_cb.bind("<<ComboboxSelected>>", on_voice_change)
+        voice_cb = ttk.Combobox(render_group, textvariable=self.voice_var, values=voices, state="readonly", width=42)
+        voice_cb.grid(row=0, column=1, columnspan=2, padx=5, pady=2, sticky="we")
 
         ttk.Label(render_group, text="Куди зберегти відео:").grid(row=1, column=0, sticky="w", pady=2)
         ttk.Entry(render_group, textvariable=self.output_video_path, width=45).grid(row=1, column=1, padx=5, pady=2, sticky="we")
@@ -215,6 +230,17 @@ class PyVoiceApp(tk.Tk):
         hint_label.pack(side=tk.LEFT)
         hint_label.bind("<Double-Button-1>", lambda e: self.open_log_window())
 
+    def open_script_editor(self):
+        """Відкриває повнорозмірне модальне вікно для зручного редагування та валідації JSON"""
+        content = self.script_text.get("1.0", tk.END).strip()
+        
+        def on_save(new_content: str):
+            self.script_text.delete("1.0", tk.END)
+            self.script_text.insert("1.0", new_content)
+            self.log_message("✏️ Сценарій оновлено з великого редактора.")
+            
+        ScriptEditorWindow(self, content, on_save)
+
     def open_log_window(self):
         """Відкриває або активує модальне/окреме вікно логів"""
         if self.log_window is not None and self.log_window.winfo_exists():
@@ -222,6 +248,21 @@ class PyVoiceApp(tk.Tk):
             self.log_window.focus_force()
         else:
             self.log_window = LogViewerWindow(self, self.log_history)
+
+    def prompt_voice_fallback(self, error_message: str, current_voice: str) -> Optional[str]:
+        """Показує інтерактивне діалогове вікно вибору альтернативного голосу (Thread-Safe)"""
+        result = {"chosen_voice": None}
+        event = threading.Event()
+
+        def _show():
+            dialog = VoiceFallbackDialog(self, error_message, current_voice)
+            self.wait_window(dialog)
+            result["chosen_voice"] = dialog.chosen_voice
+            event.set()
+
+        self.after(0, _show)
+        event.wait()
+        return result["chosen_voice"]
 
     def log_message(self, message: str):
         """Оновлює рядок статусу в головному вікні та надсилає повідомлення у вікно логів"""
@@ -342,7 +383,7 @@ class PyVoiceApp(tk.Tk):
             def update_text():
                 self.script_text.delete("1.0", tk.END)
                 self.script_text.insert(tk.END, formatted_json)
-                messagebox.showinfo("Успіх", f"ШІ успішно проаналізував відео та склав {len(items)} розгорнутих реплік!\nПерегляньте сценарій у Секції 3.")
+                messagebox.showinfo("Успіх", f"ШІ успішно проаналізував відео та склав {len(items)} розгорнутих реплік!\nПерегляньте сценарій у Секції 3 або відкрийте великий редактор.")
 
             self.after(0, update_text)
 
@@ -357,6 +398,7 @@ class PyVoiceApp(tk.Tk):
         input_vid = self.input_video_path.get().strip()
         out_vid = self.output_video_path.get().strip()
         voice = self.voice_var.get()
+        api_key = self.api_key_var.get().strip()
         script_content = self.script_text.get("1.0", tk.END).strip()
 
         if not input_vid or not os.path.exists(input_vid):
@@ -384,12 +426,12 @@ class PyVoiceApp(tk.Tk):
 
         thread = threading.Thread(
             target=self.run_rendering_thread, 
-            args=(input_vid, items, out_vid, voice),
+            args=(input_vid, items, out_vid, voice, api_key),
             daemon=True
         )
         thread.start()
 
-    def run_rendering_thread(self, input_vid, items, out_vid, voice):
+    def run_rendering_thread(self, input_vid, items, out_vid, voice, api_key):
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -400,14 +442,19 @@ class PyVoiceApp(tk.Tk):
                     items, 
                     out_vid, 
                     voice, 
-                    self.log_message
+                    self.log_message,
+                    api_key=api_key,
+                    fallback_callback=self.prompt_voice_fallback
                 )
             )
             
             self.after(0, lambda: messagebox.showinfo("Успіх", f"Відео успішно створено та збережено:\n{out_vid}"))
         except Exception as e:
             error_str = str(e)
-            self.log_message(f"❌ ПОМИЛКА МОНТАЖУ: {error_str}")
-            self.after(0, lambda: messagebox.showerror("Помилка монтажу", error_str))
+            if "скасовано" in error_str.lower():
+                self.log_message(f"🛑 Монтаж зупинено користувачем.")
+            else:
+                self.log_message(f"❌ ПОМИЛКА МОНТАЖУ: {error_str}")
+                self.after(0, lambda: messagebox.showerror("Помилка монтажу", error_str))
         finally:
             self.set_ui_busy(False)

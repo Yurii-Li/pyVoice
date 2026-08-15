@@ -73,8 +73,8 @@ def get_available_gemini_models(api_key: str, log_callback: Callable[[str], None
         raise RuntimeError(f"Не вдалося з'єднатися з серверами Google: {str(e)}")
 
     if res.status_code != 200:
-        err = safe_json_response(res).get("error", {}).get("message", res.text)
-        raise RuntimeError(f"Помилка авторизації API ключа: {err}")
+        raw_err = res.text.strip()
+        raise RuntimeError(f"Помилка авторизації API ключа [HTTP {res.status_code}]: {raw_err}")
 
     data = safe_json_response(res)
     scored_models = []
@@ -119,12 +119,12 @@ def upload_file_to_gemini(api_key: str, file_path: str, log_callback: Callable[[
 
     init_res = requests.post(init_url, headers=headers, json=body, timeout=30)
     if init_res.status_code != 200:
-        error_msg = safe_json_response(init_res).get("error", {}).get("message", init_res.text)
-        raise RuntimeError(f"Не вдалося ініціалізувати завантаження в Google: {error_msg}")
+        error_msg = init_res.text.strip()
+        raise RuntimeError(f"Не вдалося ініціалізувати завантаження в Google [HTTP {init_res.status_code}]: {error_msg}")
 
     upload_url = init_res.headers.get("X-Goog-Upload-URL")
     if not upload_url:
-        raise RuntimeError("Google API не надав URL для завантаження файлу.")
+        raise RuntimeError(f"Google API не надав URL для завантаження [HTTP {init_res.status_code}]: {init_res.text.strip()}")
 
     # Крок 2: Завантаження чанків файлу
     upload_headers = {
@@ -137,12 +137,12 @@ def upload_file_to_gemini(api_key: str, file_path: str, log_callback: Callable[[
         upload_res = requests.post(upload_url, headers=upload_headers, data=f, timeout=300)
 
     if upload_res.status_code != 200:
-        error_msg = safe_json_response(upload_res).get("error", {}).get("message", upload_res.text)
-        raise RuntimeError(f"Помилка завантаження файлу в Gemini: {error_msg}")
+        error_msg = upload_res.text.strip()
+        raise RuntimeError(f"Помилка завантаження файлу в Gemini [HTTP {upload_res.status_code}]: {error_msg}")
 
     file_info = safe_json_response(upload_res).get("file", {})
     file_uri = file_info.get("uri")
-    file_resource_name = file_info.get("name") # e.g. "files/12345"
+    file_resource_name = file_info.get("name")
 
     log_callback("⏳ Відео завантажено. Очікування підготовки Google...")
 
@@ -160,7 +160,7 @@ def upload_file_to_gemini(api_key: str, file_path: str, log_callback: Callable[[
                 log_callback("✅ Відео успішно підготовлено до аналізу.")
                 break
             elif state == "FAILED":
-                raise RuntimeError("Google не зміг обробити даний відеофайл.")
+                raise RuntimeError(f"Google не зміг обробити даний відеофайл: {check_res.text.strip()}")
         
         if time.time() - start_wait > max_wait_seconds:
             raise TimeoutError("Час очікування обробки відео у Google Gemini вичерпано.")
@@ -295,9 +295,14 @@ def analyze_video(
     explain_purpose: bool = True,
     include_outro: bool = True,
     custom_notes: str = "",
-    log_callback: Callable[[str], None] = print
+    log_callback: Callable[[str], None] = print,
+    max_retries: int = 8,
+    retry_pause_seconds: int = 10
 ) -> List[Dict[str, str]]:
-    """Аналізує дії у відео через Gemini REST API з розширеними налаштуваннями стилю"""
+    """
+    Аналізує дії у відео через Gemini REST API з 8 повторними спробами (пауза 10с)
+    та детальним виведенням повної відповіді сервера.
+    """
     api_key = api_key.strip()
     if not api_key:
         raise ValueError("Вкажіть ваш Google Gemini API Key!")
@@ -359,28 +364,55 @@ def analyze_video(
 
         for model_name in models_to_try:
             display_name = model_name.replace("models/", "")
-            log_callback(f"  Запит до моделі {display_name}...")
             api_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
-            try:
-                gen_res = requests.post(api_url, json=payload, timeout=120)
-                if gen_res.status_code == 200:
-                    res_data = safe_json_response(gen_res)
-                    candidates = res_data.get("candidates", [])
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        if parts:
-                            raw_text = parts[0].get("text", "").strip()
-                            if raw_text:
-                                log_callback(f"✅ Відповідь успішно згенеровано ({display_name})!")
-                                break
-                else:
-                    err_info = safe_json_response(gen_res).get("error", {}).get("message", gen_res.text)
-                    last_error = f"Модель {display_name}: {err_info}"
-            except Exception as e:
-                last_error = str(e)
+            
+            for attempt in range(1, max_retries + 1):
+                log_callback(f"  Запит до моделі {display_name} (спроба {attempt}/{max_retries})...")
+                try:
+                    gen_res = requests.post(api_url, json=payload, timeout=120)
+                    
+                    if gen_res.status_code == 200:
+                        res_data = safe_json_response(gen_res)
+                        candidates = res_data.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            if parts:
+                                raw_text = parts[0].get("text", "").strip()
+                                if raw_text:
+                                    log_callback(f"✅ Сценарій успішно згенеровано ({display_name})!")
+                                    break
+                    else:
+                        raw_body = gen_res.text.strip()
+                        last_error = f"[HTTP {gen_res.status_code}] {raw_body}"
+                        
+                        if gen_res.status_code in [429, 500, 502, 503, 504]:
+                            if attempt < max_retries:
+                                log_callback(f"  ⚠️ Відповідь сервера Google [HTTP {gen_res.status_code}]:\n{raw_body}")
+                                log_callback(f"  ⏳ Пауза {retry_pause_seconds}с перед спробою {attempt+1}/{max_retries}...")
+                                time.sleep(retry_pause_seconds)
+                                continue
+                        else:
+                            log_callback(f"  ❌ Помилка моделі {display_name} [HTTP {gen_res.status_code}]:\n{raw_body}")
+                            break
+
+                except requests.exceptions.Timeout:
+                    last_error = "Таймаут з'єднання з Google API (понад 120с)"
+                    if attempt < max_retries:
+                        log_callback(f"  ⚠️ Таймаут генерації. Пауза {retry_pause_seconds}с перед спробою {attempt+1}/{max_retries}...")
+                        time.sleep(retry_pause_seconds)
+                        continue
+                except Exception as e:
+                    last_error = f"Мережевий збій: {str(e)}"
+                    if attempt < max_retries:
+                        log_callback(f"  ⚠️ Помилка з'єднання: {str(e)}. Пауза {retry_pause_seconds}с перед спробою {attempt+1}/{max_retries}...")
+                        time.sleep(retry_pause_seconds)
+                        continue
+
+            if raw_text:
+                break
 
         if not raw_text:
-            raise RuntimeError(f"Не вдалося згенерувати відповідь від Gemini. {last_error or ''}")
+            raise RuntimeError(f"Не вдалося згенерувати сценарій від Gemini після {max_retries} спроб:\n{last_error or ''}")
 
         log_callback("📝 Обробка отриманого сценарію...")
         data = extract_json_data(raw_text)

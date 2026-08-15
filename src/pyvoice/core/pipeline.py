@@ -1,7 +1,7 @@
 import os
 import json
 import shutil
-from typing import Union, List, Dict, Callable
+from typing import Union, List, Dict, Callable, Optional
 from pyvoice.core.tts import generate_speech_chunks
 from pyvoice.core.video import process_video_and_sync
 from pyvoice.utils.paths import get_project_root
@@ -13,7 +13,9 @@ async def run_voiceover_pipeline(
     items_or_file: Union[str, List[Dict[str, str]]], 
     output_video: str, 
     voice: str, 
-    log_callback: Callable[[str], None]
+    log_callback: Callable[[str], None],
+    api_key: str = "",
+    fallback_callback: Optional[Callable[[str, str], Optional[str]]] = None
 ) -> None:
     """Головний пайплайн: перетворює сценарій у голос, монтує відео та очищує сміття"""
     temp_dir = os.path.join(get_project_root(), TEMP_DIR_NAME)
@@ -24,7 +26,15 @@ async def run_voiceover_pipeline(
         else:
             data = items_or_file
             
-        await generate_speech_chunks(data, voice, temp_dir, log_callback)
+        await generate_speech_chunks(
+            items=data, 
+            voice_key=voice, 
+            temp_dir=temp_dir, 
+            log_callback=log_callback, 
+            api_key=api_key,
+            fallback_callback=fallback_callback
+        )
+        
         process_video_and_sync(data, input_video, output_video, temp_dir, log_callback)
         
         log_callback("🧹 Очищення тимчасових файлів...")
