@@ -8,6 +8,7 @@ import re
 import edge_tts
 from typing import List, Dict, Callable, Optional, Tuple
 from pyvoice.core.video import get_media_duration_seconds
+from pyvoice.core.gemini import get_available_gemini_tts_models
 from pyvoice.utils.paths import get_bin_path
 
 def convert_pcm_to_mp3(pcm_data: bytes, output_mp3_path: str, rate: int = 24000) -> None:
@@ -44,12 +45,13 @@ async def generate_single_edge_speech(text: str, voice_code: str, output_path: s
     await communicate.save(output_path)
 
 def is_daily_quota_exhausted(raw_body: str) -> bool:
-    """Визначає, чи вичерпано саме добову квоту (PerDay), яку неможливо відновити короткою паузою"""
+    """Визначає, чи вичерпано саме добову квоту (PerDay) для конкретної моделі"""
     lower = raw_body.lower()
     return "perday" in lower or "quotavalue\": \"10\"" in lower or "generaterequestsperday" in lower
 
 def generate_single_gemini_speech_with_retry(
     text: str, 
+    model_name: str,
     voice_name: str, 
     api_key: str, 
     output_path: str,
@@ -59,13 +61,13 @@ def generate_single_gemini_speech_with_retry(
     retry_pause_seconds: int = 10
 ) -> Tuple[bool, str]:
     """
-    Генерує аудіо через Google Gemini з детальним логуванням,
-    миттєвим розпізнаванням добового ліміту (Instant Fallback) та повторними спробами при хвилинних лімітах.
+    Генерує аудіо через вказану модель Google Gemini з детальним логуванням,
+    миттєвим переходом при 404/400 або добовому ліміті, та паузами при хвилинних лімітах.
     """
     if not api_key:
         return False, "Відсутній Gemini API Key"
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     payload = {
         "contents": [
             {
@@ -111,26 +113,30 @@ def generate_single_gemini_speech_with_retry(
                 raw_body = res.text.strip()
                 last_error_desc = f"[HTTP {res.status_code}] {raw_body}"
                 
-                log_callback(f"  ⚠️ Відповідь сервера Google [HTTP {res.status_code}]:\n{raw_body}")
+                # 1. Якщо модель повернула 404/400 (не підтримує даний REST-метод) — ніяких повторів, миттєво переходимо
+                if res.status_code in [400, 404]:
+                    log_callback(f"  ⚠️ Модель {model_name} повернула помилку [HTTP {res.status_code}]: не підтримує REST generateContent.")
+                    return False, last_error_desc
 
-                # 1. Якщо це добова квота (PerDay = 10 на день) — миттєвий перехід без марного очікування 80 секунд
+                # 2. Якщо це добова квота для цієї моделі — негайно перемикаємо на наступну модель
                 if is_daily_quota_exhausted(raw_body):
-                    log_callback("  🚫 Виявлено вичерпання ДОБОВОЇ квоти Google Gemini (10 запитів/день). Повторні спроби скасовано для негайного вибору іншого голосу.")
-                    return False, f"Вичерпано безкоштовний добовий ліміт аудіо-запитів Google API (10 на добу):\n{raw_body}"
+                    log_callback(f"  🚫 У моделі {model_name} вичерпано добовий ліміт запитів (PerDay).")
+                    return False, f"Вичерпано добовий ліміт моделі {model_name}:\n{raw_body}"
 
-                # 2. Якщо це хвилинний ліміт — визначаємо рекомендовану паузу або беремо стандартну
+                # 3. Якщо це тимчасовий хвилинний ліміт (RPM) — робимо паузу з retryDelay
+                log_callback(f"  ⚠️ Відповідь сервера Google ({model_name}) [HTTP {res.status_code}]:\n{raw_body}")
                 delay_sec = retry_pause_seconds
                 match = re.search(r'"retryDelay":\s*"(\d+)s"', raw_body)
                 if match:
                     delay_sec = min(int(match.group(1)) + 1, 35)
 
                 if attempt < max_retries:
-                    log_callback(f"  ⏳ Хвилинний ліміт: пауза {delay_sec}с перед спробою {attempt+1}/{max_retries}...")
+                    log_callback(f"  ⏳ Хвилинний ліміт {model_name}: пауза {delay_sec}с перед спробою {attempt+1}/{max_retries}...")
                     time.sleep(delay_sec)
                     continue
 
         except requests.exceptions.Timeout:
-            last_error_desc = "Таймаут з'єднання з Google API (понад 40 секунд)"
+            last_error_desc = f"Таймаут з'єднання з {model_name} (понад 40 секунд)"
             if attempt < max_retries:
                 log_callback(f"  ⚠️ Таймаут відповіді. Пауза {retry_pause_seconds}с перед спробою {attempt+1}/{max_retries}...")
                 time.sleep(retry_pause_seconds)
@@ -153,20 +159,26 @@ async def generate_speech_chunks(
     fallback_callback: Optional[Callable[[str, str], Optional[str]]] = None
 ) -> None:
     """
-    Універсальний диспетчер синтезу мови з підтримкою retry та миттєвого fallback:
-    - Якщо добовий ліміт — негайно запитує вибір користувача у модальному вікні.
-    - Якщо хвилинний ліміт — робить до 8 спроб з паузою.
+    Універсальний диспетчер синтезу мови:
+    - Якщо одна модель Gemini вичерпала ліміт, автоматично перемикається на наступну REST-сумісну модель (3.1 Flash, 2.5 Flash, 2.5 Pro).
+    - Якщо ВСІ моделі Gemini вичерпали квоту, відкриває діалогове вікно вибору для користувача.
     """
     os.makedirs(temp_dir, exist_ok=True)
     
     current_voice = voice_key
     total = len(items)
     
+    gemini_tts_models = get_available_gemini_tts_models(api_key) if api_key else []
+    gemini_model_idx = 0
+
     while True:
-        log_callback(f"🎙 1. Генерація аудіофрагментів диктора ({current_voice})...")
-        
         is_gemini_voice = "gemini" in current_voice.lower()
         is_natural_edge = "живий" in current_voice.lower() or "жива" in current_voice.lower()
+        
+        current_gemini_model = gemini_tts_models[gemini_model_idx] if gemini_tts_models and gemini_model_idx < len(gemini_tts_models) else "gemini-2.5-flash-preview-tts"
+        
+        log_voice_title = f"{current_voice} [{current_gemini_model}]" if is_gemini_voice else current_voice
+        log_callback(f"🎙 1. Генерація аудіофрагментів диктора ({log_voice_title})...")
         
         gemini_voice_name = "Puck"
         for v_name in ["Puck", "Aoede", "Charon", "Kore", "Fenrir"]:
@@ -189,6 +201,7 @@ async def generate_speech_chunks(
             if is_gemini_voice and api_key:
                 success, error_desc = generate_single_gemini_speech_with_retry(
                     text=clean_prompt_text,
+                    model_name=current_gemini_model,
                     voice_name=gemini_voice_name,
                     api_key=api_key,
                     output_path=audio_path,
@@ -201,7 +214,7 @@ async def generate_speech_chunks(
                 if not success:
                     generation_failed = True
                     failure_error_msg = error_desc
-                    log_callback(f"❌ Gemini Voice не зміг озвучити репліку {idx+1}:\n{error_desc}")
+                    log_callback(f"❌ Модель {current_gemini_model} не змогла завершити репліку {idx+1}:\n{error_desc}")
                     break
             else:
                 await generate_single_edge_speech(clean_prompt_text, edge_voice_code, audio_path, is_natural=is_natural_edge)
@@ -213,12 +226,20 @@ async def generate_speech_chunks(
             log_callback("✅ Усі репліки успішно озвучено єдиним голосом!")
             break
 
-        # Якщо сталася помилка і потрібен вибір користувача
+        # Якщо сталася помилка з поточною моделлю Gemini, перевіряємо наступну сумісну модель
+        if is_gemini_voice and gemini_model_idx + 1 < len(gemini_tts_models):
+            gemini_model_idx += 1
+            next_model = gemini_tts_models[gemini_model_idx]
+            log_callback(f"  🔄 У моделі {current_gemini_model} вичерпано ліміт. Автоматичне перемикання на наступну сумісну модель: {next_model}...")
+            log_callback(f"  🎬 Повний перезапуск озвучки моделлю {next_model} для збереження єдиного голосу...")
+            continue
+
+        # Якщо всі сумісні моделі Gemini вичерпано, відкриваємо діалог вибору альтернативного голосу
         if fallback_callback is not None:
-            log_callback("⏳ Очікування рішення користувача в діалоговому вікні...")
+            log_callback("⏳ Усі доступні моделі Gemini вичерпали денні ліміти. Очікування рішення користувача в діалоговому вікні...")
             chosen_voice = fallback_callback(failure_error_msg, current_voice)
             if chosen_voice:
-                log_callback(f"🔄 Користувач обрав '{chosen_voice}'. Перезапуск озвучки для створення цілісного відео...")
+                log_callback(f"🔄 Користувач обрав '{chosen_voice}'. Перезапуск озвучки новим голосом...")
                 current_voice = chosen_voice
                 continue
             else:

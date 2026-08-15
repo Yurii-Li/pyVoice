@@ -45,7 +45,12 @@ def process_video_and_sync(
             end_sec = total_video_len
             
         video_clip_duration = max(0.1, end_sec - start_sec)
-        audio_len = item["audio_duration"] + 0.3  # 0.3с пауза після фрази
+        
+        # Для початкового сегмента (якщо таймкод на самому початку відео) додаємо 0.5с м'якої затримки (adelay=500|500),
+        # щоб аудіопристрої та плеєри встигли активуватися і не "ковтали" перші літери привітання
+        is_first_start = (idx == 0 or start_sec < 0.5)
+        initial_audio_delay = 0.5 if is_first_start else 0.0
+        audio_len = item["audio_duration"] + initial_audio_delay + 0.3  # 0.5с на старті + 0.3с пауза після фрази
         
         chunk_video_raw = os.path.join(temp_dir, f"vchunk_{idx}.mp4")
         
@@ -61,32 +66,43 @@ def process_video_and_sync(
         
         chunk_final = os.path.join(temp_dir, f"segment_{idx}.mp4")
         
-        # Якщо озвучка довша за дію на відео — ставимо стоп-кадр (freeze frame)
+        # Фільтри для аудіо та відео
+        video_filters = []
+        audio_filters = []
+        
+        if is_first_start:
+            audio_filters.append("adelay=500|500")
+            
         if audio_len > video_clip_duration:
             freeze_sec = audio_len - video_clip_duration
-            filter_str = f"tpad=stop_mode=clone:stop_duration={freeze_sec:.2f}"
+            video_filters.append(f"tpad=stop_mode=clone:stop_duration={freeze_sec:.2f}")
             
-            cmd = [
-                ffmpeg_exe, "-y",
-                "-i", chunk_video_raw,
-                "-i", item["audio_path"],
-                "-filter_complex", f"[0:v]{filter_str}[v]",
-                "-map", "[v]",
-                "-map", "1:a",
-                "-c:v", "libx264", "-c:a", "aac",
-                "-shortest",
-                chunk_final
-            ]
+        # Формуємо команду монтажу сегмента
+        cmd = [ffmpeg_exe, "-y", "-i", chunk_video_raw, "-i", item["audio_path"]]
+        filter_parts = []
+        
+        if video_filters:
+            filter_parts.append(f"[0:v]{','.join(video_filters)}[v]")
+            map_v = "[v]"
         else:
-            cmd = [
-                ffmpeg_exe, "-y",
-                "-i", chunk_video_raw,
-                "-i", item["audio_path"],
-                "-map", "0:v",
-                "-map", "1:a",
-                "-c:v", "libx264", "-c:a", "aac",
-                chunk_final
-            ]
+            map_v = "0:v"
+            
+        if audio_filters:
+            filter_parts.append(f"[1:a]{','.join(audio_filters)}[a]")
+            map_a = "[a]"
+        else:
+            map_a = "1:a"
+            
+        if filter_parts:
+            cmd.extend(["-filter_complex", ";".join(filter_parts)])
+            
+        cmd.extend([
+            "-map", map_v,
+            "-map", map_a,
+            "-c:v", "libx264", "-c:a", "aac",
+            "-shortest",
+            chunk_final
+        ])
             
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, creationflags=creationflags)
         segment_files.append(chunk_final)

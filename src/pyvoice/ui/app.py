@@ -108,7 +108,7 @@ class PyVoiceApp(tk.Tk):
         opts_frame = ttk.Frame(ai_group)
         opts_frame.grid(row=3, column=0, columnspan=4, sticky="we", pady=3)
         
-        ttk.Checkbutton(opts_frame, text="👋 Привітання на початку (00:00)", variable=self.include_intro_var).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(opts_frame, text="👋 Привітання на початку (00:01)", variable=self.include_intro_var).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Checkbutton(opts_frame, text="💡 Пояснювати призначення та користь функцій", variable=self.explain_purpose_var).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Checkbutton(opts_frame, text="🏁 Підсумок у кінці", variable=self.include_outro_var).pack(side=tk.LEFT)
 
