@@ -1,19 +1,70 @@
 import os
-import time
 import json
-import re
+import time
 import requests
+import re
 from typing import List, Dict, Callable
 
 def safe_json_response(res: requests.Response) -> dict:
-    """Безпечно парсить JSON відповіді або повертає словник з помилкою"""
+    """Безпечно парсить відповідь сервера"""
     try:
         return res.json()
     except Exception:
-        return {"error": {"message": res.text or f"HTTP статус {res.status_code}"}}
+        return {}
+
+def score_gemini_model(model_data: dict) -> float:
+    """
+    Динамічно оцінює придатність будь-якої моделі на основі її технічних метаданих
+    (працює автоматично для будь-яких майбутніх версій Gemini без жорсткого хардкоду)
+    """
+    name = model_data.get("name", "").lower()
+    methods = [m.lower() for m in model_data.get("supportedGenerationMethods", [])]
+    input_tokens = model_data.get("inputTokenLimit", 0)
+
+    # 1. Повинна бути основна генеративна модель Gemini
+    if "gemini" not in name:
+        return -1.0
+
+    # 2. Обов'язкова підтримка генерації контенту
+    if "generatecontent" not in methods:
+        return -1.0
+
+    # 3. Достатній ліміт контексту для відео (від 64k токенів, відсіює TTS/аудіо)
+    if input_tokens < 64000:
+        return -1.0
+
+    # 4. Відсіюємо вузькоспеціалізовані або несумісні моделі
+    for bad in ["tts", "audio", "eap", "robotics", "clip", "gemma", "computer-use", "nano", "aqa", "embed", "deep-research", "image"]:
+        if bad in name:
+            return -1.0
+
+    score = 0.0
+
+    # Розмір контекстного вікна (1M токенів = +100 балів)
+    score += min(input_tokens / 10000.0, 100.0)
+
+    # Flash моделі мають найвищий пріоритет для швидкого аналізу UI відео
+    if "flash" in name:
+        score += 150.0
+    elif "pro" in name:
+        score += 80.0
+
+    # Стабільні універсальні latest аліаси від Google
+    if "latest" in name:
+        score += 100.0
+
+    # Динамічний номер версії (наприклад 4.0 > 3.7 > 3.5 > 2.5 > 1.5)
+    version_match = re.search(r"gemini-(\d+(?:\.\d+)?)", name)
+    if version_match:
+        try:
+            score += float(version_match.group(1)) * 25.0
+        except Exception:
+            pass
+
+    return score
 
 def get_available_gemini_models(api_key: str, log_callback: Callable[[str], None]) -> List[str]:
-    """Отримує список доступних моделей для даного API ключа"""
+    """Отримує та динамічно ранжує доступні моделі за якістю та сумісністю з відео"""
     log_callback("🔑 Перевірка API ключа та доступних моделей Gemini...")
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     try:
@@ -26,38 +77,20 @@ def get_available_gemini_models(api_key: str, log_callback: Callable[[str], None
         raise RuntimeError(f"Помилка авторизації API ключа: {err}")
 
     data = safe_json_response(res)
-    available = []
+    scored_models = []
+    
     for m in data.get("models", []):
-        methods = m.get("supportedGenerationMethods", [])
-        if "generateContent" in methods:
-            available.append(m.get("name"))
+        score = score_gemini_model(m)
+        if score > 0:
+            scored_models.append((m.get("name"), score))
 
-    if not available:
-        raise RuntimeError("Для вашого API ключа не знайдено доступних моделей.")
+    if not scored_models:
+        raise RuntimeError("Для вашого API ключа не знайдено доступних мультимодальних моделей (потрібно min 64k токенів).")
 
-    # Пріоритет швидких та якісних моделей
-    priority = [
-        "models/gemini-2.5-flash",
-        "models/gemini-2.0-flash",
-        "models/gemini-1.5-flash",
-        "models/gemini-2.0-flash-lite",
-        "models/gemini-1.5-pro"
-    ]
-
-    sorted_models = []
-    for p in priority:
-        if p in available:
-            sorted_models.append(p)
-
-    for a in available:
-        if a not in sorted_models and "flash" in a:
-            sorted_models.append(a)
-
-    for a in available:
-        if a not in sorted_models:
-            sorted_models.append(a)
-
-    return sorted_models
+    # Сортуємо від найвищого балу до резервних
+    scored_models.sort(key=lambda x: x[1], reverse=True)
+    sorted_names = [name for name, _ in scored_models]
+    return sorted_names
 
 def upload_file_to_gemini(api_key: str, file_path: str, log_callback: Callable[[str], None]):
     """Завантажує файл у Gemini File API через протокол Resumable Upload"""
@@ -87,13 +120,13 @@ def upload_file_to_gemini(api_key: str, file_path: str, log_callback: Callable[[
     init_res = requests.post(init_url, headers=headers, json=body, timeout=30)
     if init_res.status_code != 200:
         error_msg = safe_json_response(init_res).get("error", {}).get("message", init_res.text)
-        raise RuntimeError(f"Помилка ініціалізації завантаження в Gemini: {error_msg}")
+        raise RuntimeError(f"Не вдалося ініціалізувати завантаження в Google: {error_msg}")
 
     upload_url = init_res.headers.get("X-Goog-Upload-URL")
     if not upload_url:
-        raise RuntimeError("Не вдалося отримати посилання для завантаження від Google.")
+        raise RuntimeError("Google API не надав URL для завантаження файлу.")
 
-    # Крок 2: Відправка бінарних даних файлу
+    # Крок 2: Завантаження чанків файлу
     upload_headers = {
         "Content-Length": str(file_size),
         "X-Goog-Upload-Offset": "0",
@@ -161,62 +194,90 @@ def extract_json_data(raw_text: str) -> List[Dict[str, str]]:
             return json.loads(m.strip())
         except Exception:
             pass
-
-    # 3. Знайти масив між '[' та ']'
-    first_bracket = raw_text.find('[')
-    last_bracket = raw_text.rfind(']')
-    if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
-        candidate = raw_text[first_bracket:last_bracket+1]
+            
+    # 3. Пошук масиву [ ... ]
+    start_idx = raw_text.find('[')
+    end_idx = raw_text.rfind(']')
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
         try:
-            return json.loads(candidate)
+            return json.loads(raw_text[start_idx:end_idx+1])
         except Exception:
             pass
+            
+    # 4. Пошук об'єкта { ... }
+    start_idx = raw_text.find('{')
+    end_idx = raw_text.rfind('}')
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        try:
+            parsed = json.loads(raw_text[start_idx:end_idx+1])
+            if isinstance(parsed, dict):
+                for v in parsed.values():
+                    if isinstance(v, list):
+                        return v
+        except Exception:
+            pass
+            
+    raise ValueError(f"ШІ надав відповідь у непідтримуваному форматі:\n{raw_text[:200]}...")
 
-    # 4. Витягти окремі об'єкти регулярним виразом
-    pattern = r'\{\s*"start"\s*:\s*"([^"]+)"\s*,\s*"text"\s*:\s*"([^"]+)"\s*\}'
-    found = re.findall(pattern, raw_text)
-    if found:
-        return [{"start": s, "text": t} for s, t in found]
-
-    raise ValueError(f"Відповідь ШІ не містить коректного JSON:\n{raw_text[:300]}")
-
-def build_system_instruction(style_preset: str, include_intro: bool, explain_purpose: bool, include_outro: bool) -> str:
-    """Формує детальну та гнучку системну інструкцію для якісного сценарію"""
-    instruction = (
-        "Ти — професійний сценарист, диктор та експерт зі створення цікавих, живих і змістовних закадрових відеороликів українською мовою.\n"
-        "Твоє завдання — детально переглянути відеоряд, зрозуміти що відбувається на екрані, і скласти повний сценарій закадрової озвучки з точними таймкодами (у форматі MM:SS).\n\n"
-        "ГОЛОВНІ ПРАВИЛА ОЗВУЧКИ:\n"
-    )
-
-    if include_intro:
-        instruction += (
-            "1. ВСТУП І ПРИВІТАННЯ (00:00): Обов'язково почни з приємного привітання глядачів та вступного пояснення "
-            "(наприклад: 'Вітаємо! У цьому відео ми детально розберемо...', 'Привіт усім! Сьогодні поглянемо як працює...').\n"
+def build_system_instruction(
+    style_preset: str,
+    include_intro: bool = True,
+    explain_purpose: bool = True,
+    include_outro: bool = True
+) -> str:
+    """Генерує детальний системний промпт відповідно до побажань користувача"""
+    
+    style_guidelines = ""
+    if "Детальний туторіал" in style_preset:
+        style_guidelines = (
+            "- СТИЛЬ: Детальний, навчальний та зрозумілий туторіал.\n"
+            "- ПОЯСНЕННЯ: Не просто констатуй дію ('клік мишкою'), а пояснюй НАВІЩО це робиться, яке призначення кнопки чи поля, та яка з цього користь.\n"
+            "- ТОН: Дружній, професійний, спокійний темп викладу."
+        )
+    elif "Блогерський" in style_preset:
+        style_guidelines = (
+            "- СТИЛЬ: Живий, динамічний, захоплюючий блогерський стиль.\n"
+            "- ПОЯСНЕННЯ: Звертайся до глядачів, підкреслюй круті фішки програми, додавай емоційного забарвлення.\n"
+            "- ТОН: Енергійний, сучасний, невимушений."
+        )
+    elif "Офіційна презентація" in style_preset:
+        style_guidelines = (
+            "- СТИЛЬ: Діловий, структурований, презентаційний.\n"
+            "- ПОЯСНЕННЯ: Описуй бізнес-цінність та функціональні переваги продукту.\n"
+            "- ТОН: Стриманий, чіткий, експертний."
+        )
+    elif "Лаконічний" in style_preset:
+        style_guidelines = (
+            "- СТИЛЬ: Короткий і точний.\n"
+            "- ПОЯСНЕННЯ: Лише сухі факти та конкретні кроки без зайвих вступів."
         )
     else:
-        instruction += "1. Починай озвучку з першої дії на екрані (00:00).\n"
+        style_guidelines = f"- СТИЛЬ ТА ПОБАЖАННЯ: {style_preset}"
+
+    rules = []
+    if include_intro:
+        rules.append("1. ОБОВ'ЯЗКОВО почни з репліки на 00:00 з привітанням глядачів та коротким анонсом того, що буде показано у відео.")
+    else:
+        rules.append("1. Починай коментувати безпосередньо з першої важливої дії.")
 
     if explain_purpose:
-        instruction += (
-            "2. ДЕТАЛІ ТА СУТЬ ФУНКЦІОНАЛУ: Не роби сухий опис на кшталт 'натискаємо кнопку'. "
-            "Пояснюй ДЛЯ ЧОГО ця дія потрібна, ЩО ЦЕ ЗА ФУНКЦІОНАЛ, як він працює і яку користь дає глядачеві/користувачеві. "
-            "Давай корисні пояснення та контекст до кожної важливої дії на екрані.\n"
-        )
+        rules.append("2. Для кожної дії детально розписуй її значення та суть, щоб відео було максимально інформативним для новачка.")
     else:
-        instruction += "2. Описуй дії лаконічно та зрозуміло.\n"
-
-    instruction += (
-        "3. МОВА ТА ПОДАЧА: Тільки природна, багата, жива українська мова без кальки. Речення мають легко вимовлятися диктором.\n"
-        "4. ТАЙМКОДИ: 'start' — це точний таймкод моменту на відео (MM:SS), коли починається дія або блок пояснення.\n"
-    )
+        rules.append("2. Коментуй лише ключові кроки.")
 
     if include_outro:
-        instruction += (
-            "5. ПІДСУМОК У КІНЦІ: Наприкінці відео зроби гарне завершення, підсумок показаного або подякуй за увагу.\n"
-        )
+        rules.append("3. Наприкінці відео зроби гарний завершальний підсумок або подякуй за перегляд.")
 
-    instruction += (
-        "\nФОРМАТ ВІДПОВІДІ:\n"
+    rules_str = "\n".join(rules)
+
+    instruction = (
+        "Ти професійний український диктор та автор навчальних відео. Твоє завдання — проаналізувати відеозапис інтерфейсу або дій користувача на екрані та скласти детальний, зв'язний сценарій озвучки.\n\n"
+        f"{style_guidelines}\n\n"
+        "ПРАВИЛА ОЗВУЧКИ:\n"
+        f"{rules_str}\n"
+        "4. Пиши розгорнуті, красиві, природні речення українською мовою без граматичних помилок.\n"
+        "5. Зазначай точний таймкод початку дії (у форматі MM:SS, наприклад '00:00', '00:15', '01:05').\n\n"
+        "ФОРМАТ ВІДПОВІДІ:\n"
         "Відповідай ВИКЛЮЧНО JSON-масивом об'єктів з полями 'start' (рядок MM:SS) та 'text' (текст репліки диктора):\n"
         "[\n"
         "  {\"start\": \"00:00\", \"text\": \"Вітаємо у цьому відео! Сьогодні ми розберемо...\"},\n"
@@ -341,11 +402,12 @@ def analyze_video(
                     })
 
         if not valid_items:
-            raise ValueError(f"ШІ повернув текст, але в ньому не знайдено списку реплік:\n{raw_text[:200]}")
+            raise ValueError(f"Отримано некоректну структуру сценарію:\n{raw_text[:200]}...")
 
-        log_callback(f"🎉 Успішно розпізнано {len(valid_items)} розгорнутих дій на екрані!")
+        log_callback(f"🎉 Сценарій готовий: сформовано {len(valid_items)} розгорнутих реплік.")
         return valid_items
 
     finally:
-        log_callback("🧹 Очищення тимчасового відео з хмари Google...")
+        # Автоматичне видалення тимчасового файлу з хмари Google
+        log_callback("🧹 Очищення тимчасового відеофайлу з серверів Google...")
         delete_gemini_file(api_key, file_resource_name)
