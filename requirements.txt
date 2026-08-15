@@ -1,3 +1,4 @@
 requests>=2.31.0
 edge-tts>=6.1.0
 pyinstaller>=6.0.0
+hupper>=1.12.1
