@@ -5,7 +5,7 @@ import json
 class ScriptEditorWindow(tk.Toplevel):
     """
     Просторе вікно для зручного редагування, перевірки та форматування сценарію озвучки
-    зі світлою темою та вбудованим рядком сповіщень без настирливих попапів.
+    зі світлою темою, прив'язкою до батьківського вікна та рядком сповіщень.
     """
     def __init__(self, parent, initial_content: str, on_save_callback):
         super().__init__(parent)
@@ -15,6 +15,8 @@ class ScriptEditorWindow(tk.Toplevel):
         
         self.parent = parent
         self.on_save_callback = on_save_callback
+        
+        self.resizable(True, True)
         
         # Центруємо вікно відносно батьківського
         try:
@@ -26,6 +28,9 @@ class ScriptEditorWindow(tk.Toplevel):
 
         self.create_widgets(initial_content)
         self.update_stats()
+        
+        self.lift()
+        self.focus_force()
 
     def create_widgets(self, initial_content: str):
         # 1. Верхня панель інструментів
@@ -102,88 +107,89 @@ class ScriptEditorWindow(tk.Toplevel):
             bg="#ffffff",
             fg="#111111",
             insertbackground="#000000",
-            selectbackground="#3399ff",
-            selectforeground="#ffffff",
-            yscrollcommand=scrollbar.set,
-            padx=12,
-            pady=10,
+            selectbackground="#cce8ff",
+            selectforeground="#000000",
             relief="solid",
-            bd=1
+            borderwidth=1,
+            padx=10,
+            pady=10,
+            yscrollcommand=scrollbar.set
         )
         self.text_widget.pack(fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.text_widget.yview)
 
-        # Вставляємо початковий текст
+        # Вставляємо початковий вміст
         self.text_widget.insert("1.0", initial_content)
-        self.text_widget.bind("<KeyRelease>", lambda e: self.on_text_change())
 
-        # 4. Нижня інформаційна панель
-        bottom_bar = ttk.Frame(self, padding="6", relief="groove")
-        bottom_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        # 4. Нижня панель статистики та підказок
+        bottom_bar = ttk.Frame(self, padding="8")
+        bottom_bar.pack(fill=tk.X)
 
         self.stats_label = ttk.Label(
             bottom_bar, 
-            text="📊 Реплік: 0 | Символів: 0", 
-            font=("Segoe UI", 9)
+            text="Символів: 0 | Реплік: 0", 
+            font=("Segoe UI", 9, "bold")
         )
         self.stats_label.pack(side=tk.LEFT)
 
-        hint = ttk.Label(
+        hint_label = ttk.Label(
             bottom_bar, 
-            text="Ctrl+Z — відмінити | Ctrl+Y — повторити", 
-            font=("Segoe UI", 8, "italic"),
+            text="Ctrl+Z: Відмінити  •  Ctrl+Y: Повторити  •  Ctrl+A: Виділити все", 
+            font=("Segoe UI", 8),
             foreground="#666666"
         )
-        hint.pack(side=tk.RIGHT)
+        hint_label.pack(side=tk.RIGHT)
 
-    def show_banner(self, text: str, status: str = "info"):
-        """Показує сповіщення у вбудованому банері з кольоровим акцентом"""
+        # Події оновлення статистики при вводі
+        self.text_widget.bind("<<Modified>>", self.on_text_modified)
+        self.text_widget.bind("<KeyRelease>", lambda e: self.update_stats())
+
+    def on_text_modified(self, event=None):
+        if self.text_widget.edit_modified():
+            self.update_stats()
+            self.text_widget.edit_modified(False)
+
+    def show_banner(self, message: str, msg_type: str = "info"):
+        """Показує повідомлення у вбудованому банері без спливаючих вікон (alert-free)"""
         colors = {
-            "success": ("#e8f8f0", "#27ae60"), # світло-зелений фон, темно-зелений текст
-            "error": ("#fde8e8", "#c0392b"),   # світло-червоний фон, червоний текст
-            "warning": ("#fef9e7", "#d35400"), # світло-жовтий фон, помаранчевий текст
-            "info": ("#f1f2f6", "#2f3542")     # сірий фон, темний текст
+            "info": ("#f1f2f6", "#2f3542"),
+            "success": ("#d4edda", "#155724"),
+            "warning": ("#fff3cd", "#856404"),
+            "error": ("#f8d7da", "#721c24")
         }
-        bg, fg = colors.get(status, colors["info"])
+        bg, fg = colors.get(msg_type, ("#f1f2f6", "#2f3542"))
         self.banner_frame.config(bg=bg)
-        self.banner_label.config(text=text, bg=bg, fg=fg)
-
-    def on_text_change(self):
-        self.update_stats()
+        self.banner_label.config(text=message, bg=bg, fg=fg)
 
     def update_stats(self):
-        """Підраховує кількість реплік та символів у реальному часі"""
+        """Оновлює лічильник символів та реплік"""
         content = self.text_widget.get("1.0", tk.END).strip()
         char_count = len(content)
+        
         replicas_count = 0
         try:
             parsed = json.loads(content)
             if isinstance(parsed, list):
                 replicas_count = len(parsed)
-            elif isinstance(parsed, dict):
-                for val in parsed.values():
-                    if isinstance(val, list):
-                        replicas_count = len(val)
-                        break
         except Exception:
-            pass
-        self.stats_label.config(text=f"📊 Реплік: {replicas_count} | Символів: {char_count}")
+            replicas_count = content.count('"text"')
+
+        self.stats_label.config(text=f"Символів: {char_count} | Реплік у сценарії: {replicas_count}")
 
     def format_json(self):
-        """Красиво форматує JSON з правильними відступами без спливаючих попапів"""
+        """Автоматично форматує JSON з красивими відступами"""
         content = self.text_widget.get("1.0", tk.END).strip()
         if not content:
-            self.show_banner("⚠️ Текстове поле порожнє — нічого форматувати.", "warning")
+            self.show_banner("⚠️ Сценарій порожній, нічого форматувати.", "warning")
             return
+
         try:
             parsed = json.loads(content)
-            formatted = json.dumps(parsed, ensure_ascii=False, indent=2)
+            formatted = json.dumps(parsed, indent=2, ensure_ascii=False)
             self.text_widget.delete("1.0", tk.END)
             self.text_widget.insert("1.0", formatted)
             self.update_stats()
-            
-            count = len(parsed) if isinstance(parsed, list) else 1
-            self.show_banner(f"✨ JSON успішно відформатовано! Сформовано {count} реплік.", "success")
+            self.show_banner("✨ JSON успішно відформатовано!", "success")
         except Exception as e:
             self.show_banner(f"❌ Помилка синтаксису JSON: {str(e)}", "error")
 
@@ -219,7 +225,9 @@ class ScriptEditorWindow(tk.Toplevel):
         self.destroy()
 
     def open_file(self):
-        filename = filedialog.askopenfilename(filetypes=[("JSON сценарії", "*.json"), ("Усі файли", "*.*")])
+        filename = filedialog.askopenfilename(parent=self, filetypes=[("JSON сценарії", "*.json"), ("Усі файли", "*.*")])
+        self.lift()
+        self.focus_force()
         if filename:
             try:
                 with open(filename, "r", encoding="utf-8") as f:
@@ -236,7 +244,9 @@ class ScriptEditorWindow(tk.Toplevel):
         if not content:
             self.show_banner("⚠️ Немає тексту для збереження.", "warning")
             return
-        filename = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON файли", "*.json")])
+        filename = filedialog.asksaveasfilename(parent=self, defaultextension=".json", filetypes=[("JSON файли", "*.json")])
+        self.lift()
+        self.focus_force()
         if filename:
             try:
                 with open(filename, "w", encoding="utf-8") as f:

@@ -14,6 +14,7 @@ from pyvoice.core.pipeline import run_voiceover_pipeline
 from pyvoice.ui.log_viewer import LogViewerWindow
 from pyvoice.ui.fallback_dialog import VoiceFallbackDialog
 from pyvoice.ui.script_editor import ScriptEditorWindow
+from pyvoice.ui.video_tools_window import TimelineVideoEditorWindow, VideoToolsWindow
 
 class PyVoiceApp(tk.Tk):
     def __init__(self):
@@ -125,18 +126,20 @@ class PyVoiceApp(tk.Tk):
         video_group = ttk.LabelFrame(main_frame, text=" 2. Вибір відео та запуск ШІ-Аналізу ", padding="8")
         video_group.pack(fill=tk.X, pady=(0, 6))
 
-        ttk.Label(video_group, text="Вхідне відео:").grid(row=0, column=0, sticky="w", pady=2)
-        ttk.Entry(video_group, textvariable=self.input_video_path, width=45).grid(row=0, column=1, padx=5, pady=2, sticky="we")
-        ttk.Button(video_group, text="Огляд...", command=self.browse_video).grid(row=0, column=2, pady=2)
+        v_row = ttk.Frame(video_group)
+        v_row.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(v_row, text="Вхідне відео:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(v_row, textvariable=self.input_video_path).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Button(v_row, text="Огляд...", command=self.browse_video).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(v_row, text="Редактор відео", command=self.open_video_tools).pack(side=tk.LEFT)
 
         self.btn_analyze = ttk.Button(
             video_group, 
             text="👁️ Проаналізувати дії у відео через ШІ (Скласти розгорнутий сценарій)", 
             command=self.start_ai_analysis
         )
-        self.btn_analyze.grid(row=1, column=0, columnspan=3, pady=(5, 2), sticky="we")
-
-        video_group.columnconfigure(1, weight=1)
+        self.btn_analyze.pack(fill=tk.X, pady=(2, 0))
 
         # -------------------------------------------------------------
         # СЕКЦІЯ 3: Редактор сценарію / таймкодів
@@ -240,6 +243,16 @@ class PyVoiceApp(tk.Tk):
             self.log_message("✏️ Сценарій оновлено з великого редактора.")
             
         ScriptEditorWindow(self, content, on_save)
+
+    def open_video_tools(self):
+        """Відкриває повноцінний візуальний відеомонтажер з таймлайном"""
+        init_path = self.input_video_path.get().strip()
+        TimelineVideoEditorWindow(self, initial_video_path=init_path, on_use_video_callback=self.on_video_tools_result)
+
+    def on_video_tools_result(self, video_path: str):
+        """Встановлює оброблене відео як вхідне для ШІ"""
+        self.input_video_path.set(video_path)
+        self.log_message(f"📹 Встановлено змонтоване відео: {os.path.basename(video_path)}")
 
     def open_log_window(self):
         """Відкриває або активує модальне/окреме вікно логів"""
