@@ -5,17 +5,19 @@ import asyncio
 import os
 import json
 import webbrowser
+import datetime
 
 from pyvoice.core.config import load_app_config, save_app_config
 from pyvoice.core.gemini import analyze_video
 from pyvoice.core.pipeline import run_voiceover_pipeline
+from pyvoice.ui.log_viewer import LogViewerWindow
 
 class PyVoiceApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PyVoice AI - Авто-Озвучка дій у відео зі стоп-кадрами")
-        self.geometry("780x820")
-        self.minsize(740, 720)
+        self.geometry("780x740")
+        self.minsize(720, 650)
         
         # Тема оформлення
         style = ttk.Style(self)
@@ -35,6 +37,11 @@ class PyVoiceApp(tk.Tk):
         self.include_intro_var = tk.BooleanVar(value=True)
         self.explain_purpose_var = tk.BooleanVar(value=True)
         self.include_outro_var = tk.BooleanVar(value=True)
+        
+        # Статус та логування
+        self.status_var = tk.StringVar(value="🟢 Готовий до роботи")
+        self.log_history = []
+        self.log_window = None
         
         self.load_config()
         self.create_widgets()
@@ -153,7 +160,7 @@ class PyVoiceApp(tk.Tk):
         ttk.Button(btn_toolbar, text="💾 Зберегти JSON", command=self.save_json_file).pack(side=tk.LEFT)
         ttk.Label(btn_toolbar, text="Формат: [{\"start\": \"00:00\", \"text\": \"...\"}]", font=("Segoe UI", 8, "italic")).pack(side=tk.RIGHT)
 
-        self.script_text = tk.Text(script_group, height=7, wrap=tk.WORD, font=("Consolas", 10))
+        self.script_text = tk.Text(script_group, height=8, wrap=tk.WORD, font=("Consolas", 10))
         self.script_text.pack(fill=tk.BOTH, expand=True)
 
         # -------------------------------------------------------------
@@ -190,21 +197,69 @@ class PyVoiceApp(tk.Tk):
         render_group.columnconfigure(1, weight=1)
 
         # -------------------------------------------------------------
-        # СЕКЦІЯ 5: Логи / Статус процесу
+        # СЕКЦІЯ 5: Інтерактивний Status Bar (UX/UI Friendly)
         # -------------------------------------------------------------
-        log_group = ttk.LabelFrame(main_frame, text=" Статус виконання ", padding="6")
-        log_group.pack(fill=tk.X)
+        status_bar = ttk.Frame(main_frame, padding="6", relief="groove")
+        status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        # Подвійний клік на статус відкриває вікно логів
+        status_bar.bind("<Double-Button-1>", lambda e: self.open_log_window())
 
-        self.log_text = tk.Text(log_group, height=5, state=tk.DISABLED, bg="#1e1e1e", fg="#00ff66", font=("Consolas", 9))
-        self.log_text.pack(fill=tk.BOTH, expand=True)
+        # Індикатор прогресу
+        self.progress_bar = ttk.Progressbar(status_bar, mode='indeterminate', length=120)
+        self.progress_bar.pack(side=tk.RIGHT, padx=(10, 0))
+
+        # Кнопка відкриття логів
+        btn_open_logs = ttk.Button(status_bar, text="📜 Журнал логів", command=self.open_log_window)
+        btn_open_logs.pack(side=tk.RIGHT, padx=(5, 0))
+
+        # Текст статусу
+        self.status_label = ttk.Label(
+            status_bar, 
+            textvariable=self.status_var, 
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+            cursor="hand2"
+        )
+        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.status_label.bind("<Double-Button-1>", lambda e: self.open_log_window())
+        
+        # Підказка
+        hint_label = ttk.Label(
+            status_bar, 
+            text=" (двічі клікніть для деталей)", 
+            font=("Segoe UI", 8, "italic"),
+            foreground="#888888"
+        )
+        hint_label.pack(side=tk.LEFT)
+        hint_label.bind("<Double-Button-1>", lambda e: self.open_log_window())
+
+    def open_log_window(self):
+        """Відкриває або активує модальне/окреме вікно логів"""
+        if self.log_window is not None and self.log_window.winfo_exists():
+            self.log_window.lift()
+            self.log_window.focus_force()
+        else:
+            self.log_window = LogViewerWindow(self, self.log_history)
 
     def log_message(self, message: str):
-        def _append():
-            self.log_text.config(state=tk.NORMAL)
-            self.log_text.insert(tk.END, message + "\n")
-            self.log_text.see(tk.END)
-            self.log_text.config(state=tk.DISABLED)
-        self.after(0, _append)
+        """Оновлює рядок статусу в головному вікні та надсилає повідомлення у вікно логів"""
+        now_str = datetime.datetime.now().strftime("%H:%M:%S")
+        full_entry = f"[{now_str}] {message}"
+        self.log_history.append(full_entry)
+        
+        def _update():
+            # Оновлюємо рядок статусу (беремо чистий текст без зайвих переносів)
+            clean_status = message.replace("\n", " ")
+            if len(clean_status) > 70:
+                clean_status = clean_status[:67] + "..."
+            self.status_var.set(clean_status)
+            
+            # Якщо вікно логів відкрито — додаємо запис туди
+            if self.log_window is not None and self.log_window.winfo_exists():
+                self.log_window.append_log(full_entry)
+                
+        self.after(0, _update)
 
     def browse_video(self):
         filename = filedialog.askopenfilename(filetypes=[("Відео файли", "*.mp4 *.avi *.mov *.mkv")])
@@ -251,6 +306,10 @@ class PyVoiceApp(tk.Tk):
             state = tk.DISABLED if busy else tk.NORMAL
             self.btn_analyze.config(state=state)
             self.btn_render.config(state=state)
+            if busy:
+                self.progress_bar.start(10)
+            else:
+                self.progress_bar.stop()
         self.after(0, _set)
 
     def start_ai_analysis(self):

@@ -47,6 +47,13 @@ def download_binaries():
 def build_exe():
     print("🔨 Початок збірки .exe файлу за допомогою PyInstaller...")
     
+    # Закриваємо попередньо запущений процес PyVoiceAI перед перезаписом
+    if sys.platform == "win32":
+        subprocess.run(
+            ["powershell", "-Command", "Stop-Process -Name PyVoiceAI -Force -ErrorAction SilentlyContinue"],
+            capture_output=True
+        )
+    
     # Видаляємо старі папки збірки
     shutil.rmtree(os.path.join(ROOT_DIR, "build"), ignore_errors=True)
     shutil.rmtree(os.path.join(ROOT_DIR, "dist"), ignore_errors=True)
