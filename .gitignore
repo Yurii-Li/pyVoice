@@ -1,0 +1,49 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Environment & Dependencies
+.venv/
+venv/
+env/
+ENV/
+
+# Configuration (містить приватний API Key користувача)
+config.json
+
+# PyInstaller & Build artifacts
+build/
+dist/
+*.spec
+
+# Downloaded Binaries (FFmpeg, ffprobe тощо)
+bin/
+*.zip
+*.tar.gz
+
+# Тимчасові файли обробки аудіо та відео
+temp_process/
+
+# Медіа файли (відео та аудіо)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.mp3
+*.wav
+
+# Логи та тимчасові файли
+*.log
+*.tmp
+
+# Тимчасові JSON сценарії
+subtitles.json
+auto_subtitles.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
