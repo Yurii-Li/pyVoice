@@ -1,56 +1,18 @@
-import json
-import asyncio
 import os
-import subprocess
-import sys
 import time
+import json
 import re
 import requests
-import edge_tts
-import shutil
+from typing import List, Dict, Callable
 
-def get_bin_path(exe_name):
-    """Отримує шлях до бінарного файлу (ffmpeg, ffprobe)"""
-    if getattr(sys, 'frozen', False):
-        return os.path.join(sys._MEIPASS, "bin", exe_name)
-    else:
-        local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin", exe_name)
-        if os.path.exists(local_path):
-            return local_path
-        return exe_name
-
-def parse_time_to_seconds(time_str: str) -> float:
-    """Конвертує 'MM:SS' або 'HH:MM:SS' у секунди"""
-    try:
-        parts = list(map(int, time_str.strip().split(':')))
-        if len(parts) == 2:
-            return float(parts[0] * 60 + parts[1])
-        elif len(parts) == 3:
-            return float(parts[0] * 3600 + parts[1] * 60 + parts[2])
-    except Exception:
-        pass
-    return 0.0
-
-def get_duration_seconds(file_path: str) -> float:
-    ffprobe_exe = get_bin_path("ffprobe.exe")
-    cmd = [
-        ffprobe_exe, "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        file_path
-    ]
-    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True, creationflags=creationflags)
-    return float(result.stdout.strip())
-
-def safe_json_response(res):
-    """Безпечно парсить JSON відповіді або повертає текст помилки"""
+def safe_json_response(res: requests.Response) -> dict:
+    """Безпечно парсить JSON відповіді або повертає словник з помилкою"""
     try:
         return res.json()
     except Exception:
         return {"error": {"message": res.text or f"HTTP статус {res.status_code}"}}
 
-def get_available_gemini_models(api_key: str, log_callback):
+def get_available_gemini_models(api_key: str, log_callback: Callable[[str], None]) -> List[str]:
     """Отримує список доступних моделей для даного API ключа"""
     log_callback("🔑 Перевірка API ключа та доступних моделей Gemini...")
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
@@ -68,12 +30,12 @@ def get_available_gemini_models(api_key: str, log_callback):
     for m in data.get("models", []):
         methods = m.get("supportedGenerationMethods", [])
         if "generateContent" in methods:
-            available.append(m.get("name")) # e.g. "models/gemini-2.0-flash"
+            available.append(m.get("name"))
 
     if not available:
         raise RuntimeError("Для вашого API ключа не знайдено доступних моделей.")
 
-    # Пріоритетний список
+    # Пріоритет швидких та якісних моделей
     priority = [
         "models/gemini-2.5-flash",
         "models/gemini-2.0-flash",
@@ -97,7 +59,7 @@ def get_available_gemini_models(api_key: str, log_callback):
 
     return sorted_models
 
-def upload_file_to_gemini(api_key: str, file_path: str, log_callback):
+def upload_file_to_gemini(api_key: str, file_path: str, log_callback: Callable[[str], None]):
     """Завантажує файл у Gemini File API через протокол Resumable Upload"""
     file_size = os.path.getsize(file_path)
     file_name = os.path.basename(file_path)
@@ -182,17 +144,17 @@ def delete_gemini_file(api_key: str, file_resource_name: str):
     except Exception:
         pass
 
-def extract_json_data(raw_text: str):
+def extract_json_data(raw_text: str) -> List[Dict[str, str]]:
     """Універсальний надійний парсер JSON з відповіді моделі"""
     raw_text = raw_text.strip()
     
-    # 1. Спроба прямого парсингу
+    # 1. Прямий парсинг
     try:
         return json.loads(raw_text)
     except Exception:
         pass
         
-    # 2. Якщо обгорнуто в ```json ... ``` або ``` ... ```
+    # 2. Якщо обгорнуто в ```json ... ```
     matches = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", raw_text)
     for m in matches:
         try:
@@ -200,7 +162,7 @@ def extract_json_data(raw_text: str):
         except Exception:
             pass
 
-    # 3. Знайти масив між першим '[' та останнім ']'
+    # 3. Знайти масив між '[' та ']'
     first_bracket = raw_text.find('[')
     last_bracket = raw_text.rfind(']')
     if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
@@ -210,17 +172,7 @@ def extract_json_data(raw_text: str):
         except Exception:
             pass
 
-    # 4. Знайти об'єкт між першим '{' та останнім '}'
-    first_brace = raw_text.find('{')
-    last_brace = raw_text.rfind('}')
-    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-        candidate = raw_text[first_brace:last_brace+1]
-        try:
-            return json.loads(candidate)
-        except Exception:
-            pass
-
-    # 5. Витягти окремі елементи за допомогою регулярного виразу
+    # 4. Витягти окремі об'єкти регулярним виразом
     pattern = r'\{\s*"start"\s*:\s*"([^"]+)"\s*,\s*"text"\s*:\s*"([^"]+)"\s*\}'
     found = re.findall(pattern, raw_text)
     if found:
@@ -228,7 +180,7 @@ def extract_json_data(raw_text: str):
 
     raise ValueError(f"Відповідь ШІ не містить коректного JSON:\n{raw_text[:300]}")
 
-def build_system_instruction(style_preset: str, include_intro: bool, explain_purpose: bool, include_outro: bool):
+def build_system_instruction(style_preset: str, include_intro: bool, explain_purpose: bool, include_outro: bool) -> str:
     """Формує детальну та гнучку системну інструкцію для якісного сценарію"""
     instruction = (
         "Ти — професійний сценарист, диктор та експерт зі створення цікавих, живих і змістовних закадрових відеороликів українською мовою.\n"
@@ -273,7 +225,7 @@ def build_system_instruction(style_preset: str, include_intro: bool, explain_pur
     )
     return instruction
 
-def analyze_video_with_gemini(
+def analyze_video(
     api_key: str, 
     video_path: str, 
     style_preset: str,
@@ -282,8 +234,8 @@ def analyze_video_with_gemini(
     explain_purpose: bool = True,
     include_outro: bool = True,
     custom_notes: str = "",
-    log_callback = print
-):
+    log_callback: Callable[[str], None] = print
+) -> List[Dict[str, str]]:
     """Аналізує дії у відео через Gemini REST API з розширеними налаштуваннями стилю"""
     api_key = api_key.strip()
     if not api_key:
@@ -292,10 +244,7 @@ def analyze_video_with_gemini(
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Відеофайл не знайдено: {video_path}")
 
-    # Отримуємо список робочих моделей
     models_to_try = get_available_gemini_models(api_key, log_callback)
-
-    # Завантажуємо відео
     file_resource_name, file_uri, mime_type = upload_file_to_gemini(api_key, video_path, log_callback)
 
     try:
@@ -400,120 +349,3 @@ def analyze_video_with_gemini(
     finally:
         log_callback("🧹 Очищення тимчасового відео з хмари Google...")
         delete_gemini_file(api_key, file_resource_name)
-
-async def generate_speech_chunks(items, voice, log_callback):
-    os.makedirs("temp_process", exist_ok=True)
-    log_callback("🎙 1. Генерація аудіофрагментів диктора...")
-    
-    total = len(items)
-    for idx, item in enumerate(items):
-        log_callback(f"  Озвучування репліки {idx+1}/{total} (таймкод {item['start']}): \"{item['text'][:30]}...\"")
-        audio_path = os.path.join("temp_process", f"audio_{idx}.mp3")
-        communicate = edge_tts.Communicate(item["text"], voice)
-        await communicate.save(audio_path)
-        item["audio_path"] = audio_path
-        item["audio_duration"] = get_duration_seconds(audio_path)
-        
-    log_callback("✅ Усі репліки успішно озвучено!")
-
-def process_video_and_sync(items, input_video, output_video, log_callback):
-    total_video_len = get_duration_seconds(input_video)
-    concat_list_path = os.path.join("temp_process", "concat_list.txt")
-    ffmpeg_exe = get_bin_path("ffmpeg.exe")
-    
-    log_callback("🎬 2. Нарізка відео, створення стоп-кадрів та синхронізація...")
-    
-    segment_files = []
-    total = len(items)
-    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        
-    for idx, item in enumerate(items):
-        log_callback(f"  Монтаж сегменту {idx+1}/{total} (таймкод {item['start']})...")
-        start_sec = parse_time_to_seconds(item["start"])
-        if idx + 1 < len(items):
-            end_sec = parse_time_to_seconds(items[idx + 1]["start"])
-        else:
-            end_sec = total_video_len
-            
-        video_clip_duration = max(0.1, end_sec - start_sec)
-        audio_len = item["audio_duration"] + 0.3  # 0.3с пауза після фрази
-        
-        chunk_video_raw = os.path.join("temp_process", f"vchunk_{idx}.mp4")
-        
-        cut_cmd = [
-            ffmpeg_exe, "-y",
-            "-ss", str(start_sec),
-            "-to", str(end_sec),
-            "-i", input_video,
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-an", chunk_video_raw
-        ]
-        subprocess.run(cut_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, creationflags=creationflags)
-        
-        chunk_final = os.path.join("temp_process", f"segment_{idx}.mp4")
-        
-        # Якщо озвучка довша за дію на відео — ставимо стоп-кадр (freeze frame)
-        if audio_len > video_clip_duration:
-            freeze_sec = audio_len - video_clip_duration
-            filter_str = f"tpad=stop_mode=clone:stop_duration={freeze_sec:.2f}"
-            
-            cmd = [
-                ffmpeg_exe, "-y",
-                "-i", chunk_video_raw,
-                "-i", item["audio_path"],
-                "-filter_complex", f"[0:v]{filter_str}[v]",
-                "-map", "[v]",
-                "-map", "1:a",
-                "-c:v", "libx264", "-c:a", "aac",
-                "-shortest",
-                chunk_final
-            ]
-        else:
-            cmd = [
-                ffmpeg_exe, "-y",
-                "-i", chunk_video_raw,
-                "-i", item["audio_path"],
-                "-map", "0:v",
-                "-map", "1:a",
-                "-c:v", "libx264", "-c:a", "aac",
-                chunk_final
-            ]
-            
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, creationflags=creationflags)
-        segment_files.append(chunk_final)
-
-    log_callback("🔗 3. Фінальне склеювання всіх сегментів...")
-    with open(concat_list_path, "w", encoding="utf-8") as f:
-        for seg in segment_files:
-            normalized_path = os.path.abspath(seg).replace("\\", "/")
-            f.write(f"file '{normalized_path}'\n")
-
-    concat_cmd = [
-        ffmpeg_exe, "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", concat_list_path,
-        "-c", "copy",
-        output_video
-    ]
-    subprocess.run(concat_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, creationflags=creationflags)
-    log_callback(f"🎉 Готово! Синхронізоване відео збережено:\n{output_video}")
-
-async def run_pipeline(input_video, items_or_file, output_video, voice, log_callback):
-    try:
-        if isinstance(items_or_file, str):
-            with open(items_or_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        else:
-            data = items_or_file
-            
-        await generate_speech_chunks(data, voice, log_callback)
-        process_video_and_sync(data, input_video, output_video, log_callback)
-        
-        log_callback("🧹 Очищення тимчасових файлів...")
-        shutil.rmtree("temp_process", ignore_errors=True)
-        log_callback("✅ Процес успішно завершено!")
-        
-    except Exception as e:
-        log_callback(f"❌ Помилка: {str(e)}")
-        raise
