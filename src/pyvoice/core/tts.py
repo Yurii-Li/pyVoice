@@ -55,11 +55,12 @@ def align_and_split_with_whisper(
     big_mp3_path: str, 
     items: List[Dict[str, any]], 
     output_dir: str, 
-    log_callback: Callable[[str], None]
+    log_callback: Callable[[str], None],
+    start_phrase_num: int = 1
 ) -> bool:
     """
     Використовує автономний whisper-cli для точного розпізнавання таймкодів слів
-    всередині одного великого згенерованого аудіофайлу та нарізає їх на окремі audio_X.mp3.
+    всередині згенерованого аудіофайлу та нарізає їх на окремі audio_X.mp3.
     """
     whisper_exe = get_bin_path("whisper-cli.exe")
     model_path = get_bin_path("ggml-tiny.bin")
@@ -101,7 +102,7 @@ def align_and_split_with_whisper(
             return False
             
     if not os.path.exists(whisper_exe) or not os.path.exists(model_path):
-        log_callback(f"  ⚠️ Whisper-cli або модель відсутні.")
+        log_callback("  ⚠️ Whisper-cli або модель відсутні.")
         return False
         
     wav_path = os.path.join(output_dir, "whisper_temp.wav")
@@ -123,7 +124,6 @@ def align_and_split_with_whisper(
             "-l", "uk",
             "-oj"
         ]
-        bin_dir = os.path.dirname(whisper_exe)
         res = subprocess.run(cmd, cwd=bin_dir, capture_output=True, text=True, creationflags=creationflags)
         
         json_path = wav_path + ".json"
@@ -146,36 +146,57 @@ def align_and_split_with_whisper(
         current_whisper_idx = 0
         
         for idx in range(total_items):
+            global_phrase_idx = start_phrase_num + idx
             target_text = items[idx]["text"].lower().strip()
             first_words = [w for w in re.findall(r'\w+', target_text)[:3] if len(w) > 2]
             
             found_start = None
             for w_idx in range(current_whisper_idx, len(transcriptions)):
                 seg_text = transcriptions[w_idx].get("text", "").lower()
-                if f"фраза {idx+1}" in seg_text or f"[{idx+1}]" in seg_text or any(w in seg_text for w in first_words):
-                    offsets = transcriptions[w_idx].get("offsets", {})
-                    found_start = max(0.0, offsets.get("from", 0) / 1000.0)
-                    current_whisper_idx = w_idx
-                    break
+                offsets = transcriptions[w_idx].get("offsets", {})
+                cand_start = max(0.0, offsets.get("from", 0) / 1000.0)
+                
+                has_match = (
+                    f"фраза {global_phrase_idx}" in seg_text or 
+                    f"[{global_phrase_idx}]" in seg_text or 
+                    (first_words and any(w in seg_text for w in first_words))
+                )
+                if has_match:
+                    if not item_starts or cand_start > item_starts[-1] + 0.3:
+                        found_start = cand_start
+                        current_whisper_idx = w_idx + 1
+                        break
                     
             if found_start is None:
-                found_start = (idx / total_items) * total_audio_len
+                prev_start = item_starts[-1] if item_starts else 0.0
+                remaining_time = max(1.0, total_audio_len - prev_start)
+                remaining_items = max(1, total_items - idx)
+                found_start = prev_start + (remaining_time / remaining_items) if item_starts else (idx / total_items) * total_audio_len
+                
             item_starts.append(found_start)
             
-        # 4. Нарізаємо кожен фрагмент з точними таймкодами
+        # 4. Нарізаємо кожен фрагмент з точними таймкодами та захистом від 0-тривалості
         for idx in range(total_items):
+            global_file_idx = start_phrase_num - 1 + idx
             s_start = item_starts[idx]
             if idx + 1 < total_items:
                 s_end = item_starts[idx + 1]
             else:
                 s_end = total_audio_len
                 
-            out_p = os.path.join(output_dir, f"audio_{idx}.mp3")
+            if s_end <= s_start + 0.1:
+                s_end = min(total_audio_len, s_start + 1.0)
+                
+            duration = max(0.2, s_end - s_start)
+            fade_out_st = max(0.0, duration - 0.02)
+            
+            out_p = os.path.join(output_dir, f"audio_{global_file_idx}.mp3")
             cut_cmd = [
                 ffmpeg_exe, "-y",
                 "-ss", f"{s_start:.3f}",
                 "-to", f"{s_end:.3f}",
                 "-i", big_mp3_path,
+                "-af", f"afade=t=in:ss=0:d=0.02,afade=t=out:st={fade_out_st:.3f}:d=0.02,loudnorm=I=-16:TP=-1.5:LRA=11",
                 "-b:a", "192k",
                 out_p
             ]
@@ -184,7 +205,6 @@ def align_and_split_with_whisper(
             items[idx]["audio_path"] = out_p
             items[idx]["audio_duration"] = get_media_duration_seconds(out_p)
             
-        log_callback(f"  🎯 Whisper Forced Alignment успішно вирівняв та нарізав усі {total_items} реплік!")
         return True
         
     except Exception as e:
@@ -308,7 +328,7 @@ async def generate_speech_chunks(
 ) -> None:
     """
     Універсальний диспетчер синтезу мови:
-    - 1 ЗАПИТ ДО GEMINI: всі репліки генеруються за 1 єдиний запит.
+    - РОЗУМНЕ ПАКЕТУВАННЯ (Smart Batching): до 30 реплік на 1 запит Gemini.
     - WHISPER FORCED ALIGNMENT: локальний Whisper автономно розпізнає послівні таймкоди та нарізає audio_X.mp3 зі 100% точністю!
     """
     os.makedirs(temp_dir, exist_ok=True)
@@ -342,44 +362,75 @@ async def generate_speech_chunks(
         failure_error_msg = ""
 
         # -------------------------------------------------------------
-        # 1 ЗАПИТ ДО GEMINI + WHISPER FORCED ALIGNMENT
+        # РОЗУМНЕ ПАКЕТУВАННЯ GEMINI (до 30 реплік на 1 запит) + WHISPER
         # -------------------------------------------------------------
         if is_gemini_voice and api_key:
-            log_callback(f"  ⚡ Генерація всього сценарію ({total} реплік) за 1 єдиний запит до {current_gemini_model}...")
+            BATCH_SIZE = 25
+            if total <= 30:
+                batches = [(0, items)]
+            else:
+                batches = [(i, items[i:i + BATCH_SIZE]) for i in range(0, total, BATCH_SIZE)]
+                
+            num_batches = len(batches)
+            if num_batches == 1:
+                log_callback(f"  ⚡ Генерація всього сценарію ({total} реплік) за 1 єдиний запит до {current_gemini_model}...")
+            else:
+                log_callback(f"  ⚡ Оптимальний поділ сценарію ({total} реплік) на {num_batches} пакети по ~{BATCH_SIZE} реплік...")
             
-            prompt_parts = []
-            for idx, item in enumerate(items):
-                clean_text = item["text"].strip()
-                prompt_parts.append(f"[Фраза {idx+1}]: {clean_text}")
+            all_batches_ok = True
+            
+            for b_idx, (offset, batch_items) in enumerate(batches):
+                b_count = len(batch_items)
+                start_num = offset + 1
+                end_num = offset + b_count
+                
+                if num_batches > 1:
+                    log_callback(f"  🎙 Озвучення пакета {b_idx+1}/{num_batches} (репліки {start_num}..{end_num}) через {current_gemini_model}...")
+                
+                prompt_parts = []
+                for idx, item in enumerate(batch_items):
+                    clean_text = item["text"].strip()
+                    prompt_parts.append(f"[Фраза {start_num + idx}]: {clean_text}")
 
-            full_script_text = "\n\n".join(prompt_parts)
-            big_audio_file = os.path.join(temp_dir, "gemini_full_voiceover.mp3")
+                full_script_text = "\n\n".join(prompt_parts)
+                big_audio_file = os.path.join(temp_dir, f"gemini_batch_{b_idx}.mp3")
 
-            success, error_desc = generate_single_gemini_speech_with_retry(
-                text=full_script_text,
-                model_name=current_gemini_model,
-                voice_name=gemini_voice_name,
-                api_key=api_key,
-                output_path=big_audio_file,
-                replica_num=1,
-                log_callback=log_callback,
-                max_retries=8,
-                retry_pause_seconds=10
-            )
+                success, error_desc = generate_single_gemini_speech_with_retry(
+                    text=full_script_text,
+                    model_name=current_gemini_model,
+                    voice_name=gemini_voice_name,
+                    api_key=api_key,
+                    output_path=big_audio_file,
+                    replica_num=b_idx + 1,
+                    log_callback=log_callback,
+                    max_retries=8,
+                    retry_pause_seconds=10
+                )
 
-            if success and os.path.exists(big_audio_file):
-                log_callback("  🔍 Локальне розпізнавання точних таймкодів реплік через Whisper AI...")
-                align_ok = align_and_split_with_whisper(big_audio_file, items, temp_dir, log_callback)
-                if align_ok:
-                    generation_failed = False
-                    log_callback("✅ Усі репліки успішно озвучено та вирівняно!")
-                    break
+                if success and os.path.exists(big_audio_file):
+                    log_callback(f"  🔍 Розпізнавання таймкодів {'пакета ' + str(b_idx+1) if num_batches > 1 else 'реплік'} через Whisper AI...")
+                    align_ok = align_and_split_with_whisper(
+                        big_audio_file, batch_items, temp_dir, log_callback, start_phrase_num=start_num
+                    )
+                    if not align_ok:
+                        all_batches_ok = False
+                        failure_error_msg = f"Помилка розпізнавання Whisper у пакеті {b_idx+1}"
+                        break
                 else:
-                    # Аудіо згенеровано успішно, але сталася помилка Whisper. Не витрачаємо запити на інші моделі Gemini!
-                    log_callback("  ⚠️ Не вдалося розпізнати таймкоди Whisper. Спробуйте повторити або оберіть інший голос.")
-                    generation_failed = True
-                    failure_error_msg = "Помилка локального розпізнавання Whisper"
-                    # Перериваємо цикл, щоб не спамити інші моделі Gemini
+                    all_batches_ok = False
+                    failure_error_msg = error_desc
+                    log_callback(f"❌ Модель {current_gemini_model} не змогла згенерувати пакет {b_idx+1}:\n{error_desc}")
+                    break
+
+            if all_batches_ok:
+                generation_failed = False
+                log_callback("✅ Усі репліки успішно озвучено та вирівняно!")
+                break
+            else:
+                generation_failed = True
+                # Якщо помилка сталася після отримання аудіо (на боці Whisper), не витрачаємо запити на інші моделі
+                if "Whisper" in failure_error_msg:
+                    log_callback("  ⚠️ Помилка вирівнювання Whisper. Оберіть інший голос або повторіть спробу.")
                     if fallback_callback is not None:
                         chosen_voice = fallback_callback(failure_error_msg, current_voice)
                         if chosen_voice:
@@ -388,10 +439,6 @@ async def generate_speech_chunks(
                         else:
                             raise RuntimeError("Озвучення скасовано користувачем.")
                     break
-            else:
-                generation_failed = True
-                failure_error_msg = error_desc
-                log_callback(f"❌ Модель {current_gemini_model} не змогла згенерувати аудіо:\n{error_desc}")
 
         # -------------------------------------------------------------
         # ЗВИЧАЙНА ГЕНЕРАЦІЯ ДЛЯ EDGE-TTS (безлімітна)
