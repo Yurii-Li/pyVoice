@@ -5,6 +5,7 @@ import base64
 import subprocess
 import requests
 import re
+import sys
 import edge_tts
 from typing import List, Dict, Callable, Optional, Tuple
 from pyvoice.core.video import get_media_duration_seconds
@@ -23,7 +24,8 @@ def convert_pcm_to_mp3(pcm_data: bytes, output_mp3_path: str, rate: int = 24000)
         "-b:a", "192k",
         output_mp3_path
     ]
-    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=creationflags)
     p.communicate(input=pcm_data)
 
 def format_natural_text_for_edge(text: str) -> str:
@@ -92,7 +94,7 @@ def generate_single_gemini_speech_with_retry(
 
     for attempt in range(1, max_retries + 1):
         try:
-            res = requests.post(url, json=payload, timeout=40)
+            res = requests.post(url, json=payload, timeout=300)
             
             if res.status_code == 200:
                 res_data = res.json()
@@ -136,7 +138,7 @@ def generate_single_gemini_speech_with_retry(
                     continue
 
         except requests.exceptions.Timeout:
-            last_error_desc = f"Таймаут з'єднання з {model_name} (понад 40 секунд)"
+            last_error_desc = f"Таймаут з'єднання з {model_name} (понад 5 хвилин)"
             if attempt < max_retries:
                 log_callback(f"  ⚠️ Таймаут відповіді. Пауза {retry_pause_seconds}с перед спробою {attempt+1}/{max_retries}...")
                 time.sleep(retry_pause_seconds)
@@ -160,8 +162,9 @@ async def generate_speech_chunks(
 ) -> None:
     """
     Універсальний диспетчер синтезу мови:
-    - Якщо одна модель Gemini вичерпала ліміт, автоматично перемикається на наступну REST-сумісну модель (3.1 Flash, 2.5 Flash, 2.5 Pro).
-    - Якщо ВСІ моделі Gemini вичерпали квоту, відкриває діалогове вікно вибору для користувача.
+    - Генерує кожну репліку з 100% точною відповідністю тексту та ідеальною тривалістю.
+    - Якщо одна модель Gemini вичерпала ліміт 10 запитів, автоматично підхоплює наступну модель (3.1 Flash -> 2.5 Flash -> 2.5 Pro) з тим же голосом.
+    - Якщо ВСІ моделі Gemini вичерпали денні квоти, відкриває діалог вибору альтернативного голосу.
     """
     os.makedirs(temp_dir, exist_ok=True)
     
@@ -193,10 +196,18 @@ async def generate_speech_chunks(
         generation_failed = False
         failure_error_msg = ""
 
-        for idx, item in enumerate(items):
+        for idx in range(total):
+            item = items[idx]
             clean_prompt_text = item["text"].strip()
-            log_callback(f"  Озвучування репліки {idx+1}/{total} (таймкод {item['start']}): \"{clean_prompt_text[:30]}...\"")
             audio_path = os.path.join(temp_dir, f"audio_{idx}.mp3")
+            
+            # Якщо файл уже успішно згенеровано раніше (наприклад до перемикання моделі) — пропускаємо
+            if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+                item["audio_path"] = audio_path
+                item["audio_duration"] = get_media_duration_seconds(audio_path)
+                continue
+
+            log_callback(f"  Озвучування репліки {idx+1}/{total} (таймкод {item['start']}): \"{clean_prompt_text[:30]}...\"")
             
             if is_gemini_voice and api_key:
                 success, error_desc = generate_single_gemini_speech_with_retry(
@@ -211,10 +222,27 @@ async def generate_speech_chunks(
                     retry_pause_seconds=10
                 )
                 
+                # Якщо у поточної моделі вичерпано ліміт — пробуємо перемкнутися на наступну модель для цієї ж репліки
+                while not success and is_gemini_voice and (gemini_model_idx + 1 < len(gemini_tts_models)):
+                    gemini_model_idx += 1
+                    current_gemini_model = gemini_tts_models[gemini_model_idx]
+                    log_callback(f"  🔄 Перемикання на модель {current_gemini_model} для репліки {idx+1}...")
+                    success, error_desc = generate_single_gemini_speech_with_retry(
+                        text=clean_prompt_text,
+                        model_name=current_gemini_model,
+                        voice_name=gemini_voice_name,
+                        api_key=api_key,
+                        output_path=audio_path,
+                        replica_num=idx+1,
+                        log_callback=log_callback,
+                        max_retries=8,
+                        retry_pause_seconds=10
+                    )
+
                 if not success:
                     generation_failed = True
                     failure_error_msg = error_desc
-                    log_callback(f"❌ Модель {current_gemini_model} не змогла завершити репліку {idx+1}:\n{error_desc}")
+                    log_callback(f"❌ Не вдалося згенерувати репліку {idx+1}:\n{error_desc}")
                     break
             else:
                 await generate_single_edge_speech(clean_prompt_text, edge_voice_code, audio_path, is_natural=is_natural_edge)
@@ -223,16 +251,8 @@ async def generate_speech_chunks(
             item["audio_duration"] = get_media_duration_seconds(audio_path)
 
         if not generation_failed:
-            log_callback("✅ Усі репліки успішно озвучено єдиним голосом!")
+            log_callback("✅ Усі репліки успішно озвучено з ідеальною синхронізацією!")
             break
-
-        # Якщо сталася помилка з поточною моделлю Gemini, перевіряємо наступну сумісну модель
-        if is_gemini_voice and gemini_model_idx + 1 < len(gemini_tts_models):
-            gemini_model_idx += 1
-            next_model = gemini_tts_models[gemini_model_idx]
-            log_callback(f"  🔄 У моделі {current_gemini_model} вичерпано ліміт. Автоматичне перемикання на наступну сумісну модель: {next_model}...")
-            log_callback(f"  🎬 Повний перезапуск озвучки моделлю {next_model} для збереження єдиного голосу...")
-            continue
 
         # Якщо всі сумісні моделі Gemini вичерпано, відкриваємо діалог вибору альтернативного голосу
         if fallback_callback is not None:

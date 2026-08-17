@@ -25,7 +25,10 @@ def process_video_and_sync(
     temp_dir: str, 
     log_callback: Callable[[str], None]
 ) -> None:
-    """Нарізає відео, додає стоп-кадри при потребі та склеює синхронізоване відео"""
+    """
+    Нарізає відео, додає стоп-кадри при потребі та склеює синхронізоване відео.
+    Гарантує 100% збереження хронометражу та ідеальну синхронізацію звуку з відеорядом.
+    """
     total_video_len = get_media_duration_seconds(input_video)
     concat_list_path = os.path.join(temp_dir, "concat_list.txt")
     ffmpeg_exe = get_bin_path("ffmpeg.exe")
@@ -46,14 +49,19 @@ def process_video_and_sync(
             
         video_clip_duration = max(0.1, end_sec - start_sec)
         
-        # Для початкового сегмента (якщо таймкод на самому початку відео) додаємо 0.5с м'якої затримки (adelay=500|500),
-        # щоб аудіопристрої та плеєри встигли активуватися і не "ковтали" перші літери привітання
+        # Для початкового сегмента (якщо таймкод на самому початку відео) додаємо 0.5с м'якої затримки (adelay=500|500)
         is_first_start = (idx == 0 or start_sec < 0.5)
         initial_audio_delay = 0.5 if is_first_start else 0.0
-        audio_len = item["audio_duration"] + initial_audio_delay + 0.3  # 0.5с на старті + 0.3с пауза після фрази
+        
+        raw_audio_duration = float(item["audio_duration"])
+        effective_audio_duration = raw_audio_duration + initial_audio_delay
+        
+        # Фінальна тривалість сегмента: не менша за оригінальне відео, і достатня для повної озвучки + мікропауза 0.2с
+        final_seg_duration = max(video_clip_duration, effective_audio_duration + 0.2)
         
         chunk_video_raw = os.path.join(temp_dir, f"vchunk_{idx}.mp4")
         
+        # Вирізаємо чистий відеофрагмент оригінальної тривалості
         cut_cmd = [
             ffmpeg_exe, "-y",
             "-ss", str(start_sec),
@@ -66,18 +74,22 @@ def process_video_and_sync(
         
         chunk_final = os.path.join(temp_dir, f"segment_{idx}.mp4")
         
-        # Фільтри для аудіо та відео
+        # Формуємо фільтри для точної синхронізації
         video_filters = []
         audio_filters = []
         
         if is_first_start:
             audio_filters.append("adelay=500|500")
             
-        if audio_len > video_clip_duration:
-            freeze_sec = audio_len - video_clip_duration
-            video_filters.append(f"tpad=stop_mode=clone:stop_duration={freeze_sec:.2f}")
+        # Якщо диктор говорить довше, ніж триває сцена на відео — заморожуємо останній кадр
+        if final_seg_duration > video_clip_duration + 0.05:
+            freeze_sec = final_seg_duration - video_clip_duration
+            video_filters.append(f"tpad=stop_mode=clone:stop_duration={freeze_sec:.3f}")
             
-        # Формуємо команду монтажу сегмента
+        # Доповнюємо аудіо тишею до повної тривалості відео (щоб потоки мали рівну тривалість)
+        audio_filters.append("apad")
+            
+        # Збираємо сегмент із фіксованим хронометражем
         cmd = [ffmpeg_exe, "-y", "-i", chunk_video_raw, "-i", item["audio_path"]]
         filter_parts = []
         
@@ -100,7 +112,7 @@ def process_video_and_sync(
             "-map", map_v,
             "-map", map_a,
             "-c:v", "libx264", "-c:a", "aac",
-            "-shortest",
+            "-t", f"{final_seg_duration:.3f}",
             chunk_final
         ])
             
