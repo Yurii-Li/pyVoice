@@ -51,6 +51,155 @@ def is_daily_quota_exhausted(raw_body: str) -> bool:
     lower = raw_body.lower()
     return "perday" in lower or "quotavalue\": \"10\"" in lower or "generaterequestsperday" in lower
 
+def align_and_split_with_whisper(
+    big_mp3_path: str, 
+    items: List[Dict[str, any]], 
+    output_dir: str, 
+    log_callback: Callable[[str], None]
+) -> bool:
+    """
+    Використовує автономний whisper-cli для точного розпізнавання таймкодів слів
+    всередині одного великого згенерованого аудіофайлу та нарізає їх на окремі audio_X.mp3.
+    """
+    whisper_exe = get_bin_path("whisper-cli.exe")
+    model_path = get_bin_path("ggml-tiny.bin")
+    ffmpeg_exe = get_bin_path("ffmpeg.exe")
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    
+    bin_dir = os.path.dirname(whisper_exe)
+    os.makedirs(bin_dir, exist_ok=True)
+    
+    # 1. Якщо модель відсутня — автоматично завантажуємо її
+    if not os.path.exists(model_path) or os.path.getsize(model_path) < 10000000:
+        try:
+            log_callback("  📥 Одноразове завантаження моделі Whisper (~75 МБ)...")
+            import urllib.request
+            urllib.request.urlretrieve("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin", model_path)
+            log_callback("  ✅ Модель Whisper успішно завантажена!")
+        except Exception as e:
+            log_callback(f"  ⚠️ Не вдалося завантажити модель Whisper: {str(e)}")
+            return False
+
+    # 2. Якщо бінарник whisper-cli відсутній — автоматично завантажуємо рушій
+    if not os.path.exists(whisper_exe) or os.path.getsize(whisper_exe) < 100000:
+        try:
+            log_callback("  📥 Одноразове встановлення рушія Whisper (~2 МБ)...")
+            import urllib.request, zipfile, io
+            zip_url = "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip"
+            req = urllib.request.Request(zip_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req) as resp:
+                with zipfile.ZipFile(io.BytesIO(resp.read())) as z:
+                    for info in z.infolist():
+                        base = os.path.basename(info.filename)
+                        if base and not info.is_dir():
+                            out_p = os.path.join(bin_dir, base)
+                            with open(out_p, "wb") as f:
+                                f.write(z.read(info.filename))
+            log_callback("  ✅ Рушій Whisper успішно встановлено!")
+        except Exception as e:
+            log_callback(f"  ⚠️ Не вдалося встановити рушій Whisper: {str(e)}")
+            return False
+            
+    if not os.path.exists(whisper_exe) or not os.path.exists(model_path):
+        log_callback(f"  ⚠️ Whisper-cli або модель відсутні.")
+        return False
+        
+    wav_path = os.path.join(output_dir, "whisper_temp.wav")
+    try:
+        # 1. Конвертуємо великий MP3 у 16kHz mono WAV для Whisper
+        subprocess.run([
+            ffmpeg_exe, "-y",
+            "-i", big_mp3_path,
+            "-ar", "16000",
+            "-ac", "1",
+            wav_path
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, creationflags=creationflags)
+        
+        # 2. Запускаємо автономний Whisper CLI для розпізнавання таймкодів
+        cmd = [
+            whisper_exe,
+            "-m", model_path,
+            "-f", wav_path,
+            "-l", "uk",
+            "-oj"
+        ]
+        bin_dir = os.path.dirname(whisper_exe)
+        res = subprocess.run(cmd, cwd=bin_dir, capture_output=True, text=True, creationflags=creationflags)
+        
+        json_path = wav_path + ".json"
+        if not os.path.exists(json_path):
+            log_callback(f"  ⚠️ Не вдалося згенерувати JSON розпізнавання Whisper: {res.stderr[:200] if res.stderr else res.stdout[:200]}")
+            return False
+            
+        with open(json_path, "r", encoding="utf-8") as f:
+            w_data = json.load(f)
+            
+        transcriptions = w_data.get("transcription", [])
+        if not transcriptions:
+            return False
+            
+        total_audio_len = get_media_duration_seconds(big_mp3_path)
+        total_items = len(items)
+        
+        # 3. Знаходимо точки початку кожної репліки за маркерами та словами
+        item_starts = []
+        current_whisper_idx = 0
+        
+        for idx in range(total_items):
+            target_text = items[idx]["text"].lower().strip()
+            first_words = [w for w in re.findall(r'\w+', target_text)[:3] if len(w) > 2]
+            
+            found_start = None
+            for w_idx in range(current_whisper_idx, len(transcriptions)):
+                seg_text = transcriptions[w_idx].get("text", "").lower()
+                if f"фраза {idx+1}" in seg_text or f"[{idx+1}]" in seg_text or any(w in seg_text for w in first_words):
+                    offsets = transcriptions[w_idx].get("offsets", {})
+                    found_start = max(0.0, offsets.get("from", 0) / 1000.0)
+                    current_whisper_idx = w_idx
+                    break
+                    
+            if found_start is None:
+                found_start = (idx / total_items) * total_audio_len
+            item_starts.append(found_start)
+            
+        # 4. Нарізаємо кожен фрагмент з точними таймкодами
+        for idx in range(total_items):
+            s_start = item_starts[idx]
+            if idx + 1 < total_items:
+                s_end = item_starts[idx + 1]
+            else:
+                s_end = total_audio_len
+                
+            out_p = os.path.join(output_dir, f"audio_{idx}.mp3")
+            cut_cmd = [
+                ffmpeg_exe, "-y",
+                "-ss", f"{s_start:.3f}",
+                "-to", f"{s_end:.3f}",
+                "-i", big_mp3_path,
+                "-b:a", "192k",
+                out_p
+            ]
+            subprocess.run(cut_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, creationflags=creationflags)
+            
+            items[idx]["audio_path"] = out_p
+            items[idx]["audio_duration"] = get_media_duration_seconds(out_p)
+            
+        log_callback(f"  🎯 Whisper Forced Alignment успішно вирівняв та нарізав усі {total_items} реплік!")
+        return True
+        
+    except Exception as e:
+        log_callback(f"  ⚠️ Помилка вирівнювання Whisper: {str(e)}")
+        return False
+    finally:
+        try:
+            if os.path.exists(wav_path):
+                os.remove(wav_path)
+            json_file = wav_path + ".json"
+            if os.path.exists(json_file):
+                os.remove(json_file)
+        except Exception:
+            pass
+
 def generate_single_gemini_speech_with_retry(
     text: str, 
     model_name: str,
@@ -115,17 +264,14 @@ def generate_single_gemini_speech_with_retry(
                 raw_body = res.text.strip()
                 last_error_desc = f"[HTTP {res.status_code}] {raw_body}"
                 
-                # 1. Якщо модель повернула 404/400 (не підтримує даний REST-метод) — ніяких повторів, миттєво переходимо
                 if res.status_code in [400, 404]:
                     log_callback(f"  ⚠️ Модель {model_name} повернула помилку [HTTP {res.status_code}]: не підтримує REST generateContent.")
                     return False, last_error_desc
 
-                # 2. Якщо це добова квота для цієї моделі — негайно перемикаємо на наступну модель
                 if is_daily_quota_exhausted(raw_body):
                     log_callback(f"  🚫 У моделі {model_name} вичерпано добовий ліміт запитів (PerDay).")
                     return False, f"Вичерпано добовий ліміт моделі {model_name}:\n{raw_body}"
 
-                # 3. Якщо це тимчасовий хвилинний ліміт (RPM) — робимо паузу з retryDelay
                 log_callback(f"  ⚠️ Відповідь сервера Google ({model_name}) [HTTP {res.status_code}]:\n{raw_body}")
                 delay_sec = retry_pause_seconds
                 match = re.search(r'"retryDelay":\s*"(\d+)s"', raw_body)
@@ -162,9 +308,8 @@ async def generate_speech_chunks(
 ) -> None:
     """
     Універсальний диспетчер синтезу мови:
-    - Генерує кожну репліку з 100% точною відповідністю тексту та ідеальною тривалістю.
-    - Якщо одна модель Gemini вичерпала ліміт 10 запитів, автоматично підхоплює наступну модель (3.1 Flash -> 2.5 Flash -> 2.5 Pro) з тим же голосом.
-    - Якщо ВСІ моделі Gemini вичерпали денні квоти, відкриває діалог вибору альтернативного голосу.
+    - 1 ЗАПИТ ДО GEMINI: всі репліки генеруються за 1 єдиний запит.
+    - WHISPER FORCED ALIGNMENT: локальний Whisper автономно розпізнає послівні таймкоди та нарізає audio_X.mp3 зі 100% точністю!
     """
     os.makedirs(temp_dir, exist_ok=True)
     
@@ -196,63 +341,81 @@ async def generate_speech_chunks(
         generation_failed = False
         failure_error_msg = ""
 
-        for idx in range(total):
-            item = items[idx]
-            clean_prompt_text = item["text"].strip()
-            audio_path = os.path.join(temp_dir, f"audio_{idx}.mp3")
+        # -------------------------------------------------------------
+        # 1 ЗАПИТ ДО GEMINI + WHISPER FORCED ALIGNMENT
+        # -------------------------------------------------------------
+        if is_gemini_voice and api_key:
+            log_callback(f"  ⚡ Генерація всього сценарію ({total} реплік) за 1 єдиний запит до {current_gemini_model}...")
             
-            # Якщо файл уже успішно згенеровано раніше (наприклад до перемикання моделі) — пропускаємо
-            if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
-                item["audio_path"] = audio_path
-                item["audio_duration"] = get_media_duration_seconds(audio_path)
-                continue
+            prompt_parts = []
+            for idx, item in enumerate(items):
+                clean_text = item["text"].strip()
+                prompt_parts.append(f"[Фраза {idx+1}]: {clean_text}")
 
-            log_callback(f"  Озвучування репліки {idx+1}/{total} (таймкод {item['start']}): \"{clean_prompt_text[:30]}...\"")
-            
-            if is_gemini_voice and api_key:
-                success, error_desc = generate_single_gemini_speech_with_retry(
-                    text=clean_prompt_text,
-                    model_name=current_gemini_model,
-                    voice_name=gemini_voice_name,
-                    api_key=api_key,
-                    output_path=audio_path,
-                    replica_num=idx+1,
-                    log_callback=log_callback,
-                    max_retries=8,
-                    retry_pause_seconds=10
-                )
-                
-                # Якщо у поточної моделі вичерпано ліміт — пробуємо перемкнутися на наступну модель для цієї ж репліки
-                while not success and is_gemini_voice and (gemini_model_idx + 1 < len(gemini_tts_models)):
-                    gemini_model_idx += 1
-                    current_gemini_model = gemini_tts_models[gemini_model_idx]
-                    log_callback(f"  🔄 Перемикання на модель {current_gemini_model} для репліки {idx+1}...")
-                    success, error_desc = generate_single_gemini_speech_with_retry(
-                        text=clean_prompt_text,
-                        model_name=current_gemini_model,
-                        voice_name=gemini_voice_name,
-                        api_key=api_key,
-                        output_path=audio_path,
-                        replica_num=idx+1,
-                        log_callback=log_callback,
-                        max_retries=8,
-                        retry_pause_seconds=10
-                    )
+            full_script_text = "\n\n".join(prompt_parts)
+            big_audio_file = os.path.join(temp_dir, "gemini_full_voiceover.mp3")
 
-                if not success:
+            success, error_desc = generate_single_gemini_speech_with_retry(
+                text=full_script_text,
+                model_name=current_gemini_model,
+                voice_name=gemini_voice_name,
+                api_key=api_key,
+                output_path=big_audio_file,
+                replica_num=1,
+                log_callback=log_callback,
+                max_retries=8,
+                retry_pause_seconds=10
+            )
+
+            if success and os.path.exists(big_audio_file):
+                log_callback("  🔍 Локальне розпізнавання точних таймкодів реплік через Whisper AI...")
+                align_ok = align_and_split_with_whisper(big_audio_file, items, temp_dir, log_callback)
+                if align_ok:
+                    generation_failed = False
+                    log_callback("✅ Усі репліки успішно озвучено та вирівняно!")
+                    break
+                else:
+                    # Аудіо згенеровано успішно, але сталася помилка Whisper. Не витрачаємо запити на інші моделі Gemini!
+                    log_callback("  ⚠️ Не вдалося розпізнати таймкоди Whisper. Спробуйте повторити або оберіть інший голос.")
                     generation_failed = True
-                    failure_error_msg = error_desc
-                    log_callback(f"❌ Не вдалося згенерувати репліку {idx+1}:\n{error_desc}")
+                    failure_error_msg = "Помилка локального розпізнавання Whisper"
+                    # Перериваємо цикл, щоб не спамити інші моделі Gemini
+                    if fallback_callback is not None:
+                        chosen_voice = fallback_callback(failure_error_msg, current_voice)
+                        if chosen_voice:
+                            current_voice = chosen_voice
+                            continue
+                        else:
+                            raise RuntimeError("Озвучення скасовано користувачем.")
                     break
             else:
+                generation_failed = True
+                failure_error_msg = error_desc
+                log_callback(f"❌ Модель {current_gemini_model} не змогла згенерувати аудіо:\n{error_desc}")
+
+        # -------------------------------------------------------------
+        # ЗВИЧАЙНА ГЕНЕРАЦІЯ ДЛЯ EDGE-TTS (безлімітна)
+        # -------------------------------------------------------------
+        else:
+            for idx in range(total):
+                item = items[idx]
+                clean_prompt_text = item["text"].strip()
+                audio_path = os.path.join(temp_dir, f"audio_{idx}.mp3")
+                log_callback(f"  Озвучування репліки {idx+1}/{total} (таймкод {item['start']}): \"{clean_prompt_text[:30]}...\"")
                 await generate_single_edge_speech(clean_prompt_text, edge_voice_code, audio_path, is_natural=is_natural_edge)
-                
-            item["audio_path"] = audio_path
-            item["audio_duration"] = get_media_duration_seconds(audio_path)
+                item["audio_path"] = audio_path
+                item["audio_duration"] = get_media_duration_seconds(audio_path)
 
         if not generation_failed:
-            log_callback("✅ Усі репліки успішно озвучено з ідеальною синхронізацією!")
+            log_callback("✅ Усі репліки успішно озвучено та вирівняно!")
             break
+
+        # Якщо сталася помилка мережі або ліміту саме з Gemini API — перемикаємо на наступну модель
+        if is_gemini_voice and gemini_model_idx + 1 < len(gemini_tts_models):
+            gemini_model_idx += 1
+            next_model = gemini_tts_models[gemini_model_idx]
+            log_callback(f"  🔄 Перемикання на наступну модель {next_model}...")
+            continue
 
         # Якщо всі сумісні моделі Gemini вичерпано, відкриваємо діалог вибору альтернативного голосу
         if fallback_callback is not None:
