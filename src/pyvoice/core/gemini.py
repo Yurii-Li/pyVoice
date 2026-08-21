@@ -271,9 +271,10 @@ def build_system_instruction(
     style_preset: str,
     include_intro: bool = True,
     explain_purpose: bool = True,
-    include_outro: bool = True
+    include_outro: bool = True,
+    task_spec: str = ""
 ) -> str:
-    """Генерує детальний системний промпт відповідно до побажань користувача"""
+    """Генерує детальний системний промпт відповідно до побажань користувача та ТЗ"""
     
     style_guidelines = ""
     if "Детальний туторіал" in style_preset:
@@ -318,9 +319,25 @@ def build_system_instruction(
 
     rules_str = "\n".join(rules)
 
+    task_spec_instruction = ""
+    if task_spec and task_spec.strip():
+        task_spec_instruction = (
+            "\n\n==================================================\n"
+            "📋 ТЕХНІЧНЕ ЗАВДАННЯ / СПИСОК ЗАДАЧ ВІД КОРИСТУВАЧА:\n"
+            f"{task_spec.strip()}\n"
+            "==================================================\n"
+            "ВАЖЛИВІ ВКАЗІВКИ ЩОДО ТЗ ТА СПИСКУ ЗАДАЧ:\n"
+            "1. ТЗ може містити як окрему задачу, так і цілий перелік/чекліст завдань із беклогу (з оцінками часу, чекбоксами [x], технічними нотатками чи назвами таблиць).\n"
+            "2. АВТО-ВИЗНАЧЕННЯ ЗАДАЧІ: Проаналізуй інтерфейс у відео та автоматично визнач, яка саме задача (або які з них) демонструються на екрані. Сфокусуй озвучку саме на цій задачі.\n"
+            "3. ТЕРМІНОЛОГІЯ ТА ЛОГІКА: Використовуй назви колонок, полів, галочок, алгоритми (наприклад, Fi-Fo, розрахунок кратності, підбір залишків), описані в задачі, та пояснюй їх людською, професійною мовою.\n"
+            "4. ПОЯСНЕННЯ СУТІ ЗМІН: Пояснюй не просто 'натиснули кнопку', а що це за доопрацювання (наприклад, 'додано новий фільтр залишків', 'налаштовано автоматичне заокруглення до кратності пакування').\n"
+            "5. Якщо демонструється кілька задач послідовно — роби плавні логічні переходи між ними.\n"
+        )
+
     instruction = (
         "Ти професійний український диктор та автор навчальних відео. Твоє завдання — проаналізувати відеозапис інтерфейсу або дій користувача на екрані та скласти детальний, зв'язний сценарій озвучки.\n\n"
-        f"{style_guidelines}\n\n"
+        f"{style_guidelines}"
+        f"{task_spec_instruction}\n\n"
         "ПРАВИЛА ОЗВУЧКИ:\n"
         f"{rules_str}\n"
         "4. Пиши розгорнуті, красиві, природні речення українською мовою без граматичних помилок.\n"
@@ -339,6 +356,7 @@ def analyze_video(
     video_path: str, 
     style_preset: str,
     video_topic: str = "",
+    task_spec: str = "",
     include_intro: bool = True,
     explain_purpose: bool = True,
     include_outro: bool = True,
@@ -368,12 +386,15 @@ def analyze_video(
             style_preset=style_preset,
             include_intro=include_intro,
             explain_purpose=explain_purpose,
-            include_outro=include_outro
+            include_outro=include_outro,
+            task_spec=task_spec
         )
 
         user_prompt_text = "Проаналізуй це відео та склади повний, розгорнутий сценарій озвучки з таймкодами."
         if video_topic and video_topic.strip():
             user_prompt_text += f"\nКонтекст / Про що це відео: {video_topic.strip()}"
+        if task_spec and task_spec.strip():
+            user_prompt_text += f"\n\n📋 Технічне завдання (ТЗ / Опис задачі):\n{task_spec.strip()}"
         if style_preset and style_preset.strip():
             user_prompt_text += f"\nОбраний стиль: {style_preset.strip()}"
         if custom_notes and custom_notes.strip():

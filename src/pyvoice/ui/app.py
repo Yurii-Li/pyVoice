@@ -14,7 +14,9 @@ from pyvoice.core.pipeline import run_voiceover_pipeline
 from pyvoice.ui.log_viewer import LogViewerWindow
 from pyvoice.ui.fallback_dialog import VoiceFallbackDialog
 from pyvoice.ui.script_editor import ScriptEditorWindow
+from pyvoice.ui.task_spec_dialog import TaskSpecDialog
 from pyvoice.ui.video_tools_window import TimelineVideoEditorWindow, VideoToolsWindow
+from pyvoice.ui.shortcuts import enable_universal_shortcuts
 
 class PyVoiceApp(tk.Tk):
     def __init__(self):
@@ -36,6 +38,9 @@ class PyVoiceApp(tk.Tk):
         if "clam" in style.theme_names():
             style.theme_use('clam')
             
+        # Універсальні гарячі клавіші (Ctrl+V, Ctrl+C, Ctrl+A тощо) для української розкладки + контекстне меню
+        enable_universal_shortcuts(self)
+            
         # Змінні
         self.api_key_var = tk.StringVar(value=load_api_key())
         self.input_video_path = tk.StringVar()
@@ -46,6 +51,7 @@ class PyVoiceApp(tk.Tk):
         
         # Налаштування стилю та глибини озвучки
         self.video_topic_var = tk.StringVar()
+        self.task_spec_text = ""
         self.style_var = tk.StringVar(value="Детальний туторіал (з привітанням, поясненням суті та користі дій)")
         self.custom_notes_var = tk.StringVar()
         self.include_intro_var = tk.BooleanVar(value=True)
@@ -66,8 +72,73 @@ class PyVoiceApp(tk.Tk):
         webbrowser.open("https://aistudio.google.com/app/apikey")
 
     def create_widgets(self):
-        main_frame = ttk.Frame(self, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # -------------------------------------------------------------
+        # СЕКЦІЯ 5: Закріплений знизу Status Bar (завжди видимий)
+        # -------------------------------------------------------------
+        status_bar = ttk.Frame(self, padding="5", relief="groove")
+        status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        status_bar.bind("<Double-Button-1>", lambda e: self.open_log_window())
+
+        self.progress_bar = ttk.Progressbar(status_bar, mode='indeterminate', length=110)
+        self.progress_bar.pack(side=tk.RIGHT, padx=(8, 0))
+
+        btn_open_logs = ttk.Button(status_bar, text="📜 Журнал логів", command=self.open_log_window)
+        btn_open_logs.pack(side=tk.RIGHT, padx=(4, 0))
+
+        self.status_label = ttk.Label(
+            status_bar, 
+            textvariable=self.status_var, 
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+            cursor="hand2"
+        )
+        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.status_label.bind("<Double-Button-1>", lambda e: self.open_log_window())
+        
+        hint_label = ttk.Label(
+            status_bar, 
+            text=" (двічі клікніть для деталей)", 
+            font=("Segoe UI", 8, "italic"),
+            foreground="#888888"
+        )
+        hint_label.pack(side=tk.LEFT)
+        hint_label.bind("<Double-Button-1>", lambda e: self.open_log_window())
+
+        # -------------------------------------------------------------
+        # Скролований контейнер для всіх налаштувань та секцій
+        # -------------------------------------------------------------
+        scroll_container = ttk.Frame(self)
+        scroll_container.pack(fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(scroll_container, highlightthickness=0, borderwidth=0)
+        v_scrollbar = ttk.Scrollbar(scroll_container, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=v_scrollbar.set)
+
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        main_frame = ttk.Frame(self.canvas, padding="10")
+        self.canvas_window = self.canvas.create_window((0, 0), window=main_frame, anchor="nw")
+
+        def _on_frame_configure(event):
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+        def _on_canvas_configure(event):
+            self.canvas.itemconfig(self.canvas_window, width=event.width)
+
+        main_frame.bind("<Configure>", _on_frame_configure)
+        self.canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            widget = event.widget
+            # Якщо курсор над Text-віджетом сценарію, дозволяємо його власний скрол
+            if isinstance(widget, tk.Text):
+                return
+            if self.canvas.winfo_exists() and self.canvas.yview() != (0.0, 1.0):
+                self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        self.bind_all("<MouseWheel>", _on_mousewheel, add="+")
 
         # -------------------------------------------------------------
         # СЕКЦІЯ 1: Налаштування ШІ та Стилю озвучки
@@ -93,8 +164,25 @@ class PyVoiceApp(tk.Tk):
         entry_topic = ttk.Entry(ai_group, textvariable=self.video_topic_var, width=45)
         entry_topic.grid(row=1, column=1, columnspan=3, padx=5, pady=2, sticky="we")
 
-        # Рядок 2: Стиль коментатора
-        ttk.Label(ai_group, text="Стиль подачі:").grid(row=2, column=0, sticky="w", pady=2)
+        # Рядок 2: Технічне завдання / Опис задачі (ТЗ)
+        ttk.Label(ai_group, text="Технічне завдання (ТЗ):").grid(row=2, column=0, sticky="w", pady=2)
+        tz_frame = ttk.Frame(ai_group)
+        tz_frame.grid(row=2, column=1, columnspan=3, padx=5, pady=2, sticky="we")
+
+        ttk.Button(tz_frame, text="📋 Редагувати ТЗ...", command=self.open_task_spec_editor).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(tz_frame, text="📂 Завантажити з файлу...", command=self.browse_task_spec_file).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(tz_frame, text="❌", width=3, command=self.clear_task_spec).pack(side=tk.LEFT, padx=(0, 6))
+
+        self.task_spec_status_label = ttk.Label(
+            tz_frame, 
+            text="⚪ ТЗ не додано", 
+            font=("Segoe UI", 8, "italic"),
+            foreground="#666666"
+        )
+        self.task_spec_status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Рядок 3: Стиль коментатора
+        ttk.Label(ai_group, text="Стиль подачі:").grid(row=3, column=0, sticky="w", pady=2)
         styles = [
             "Детальний туторіал (з привітанням, поясненням суті та користі дій)",
             "Блогерський розмовний стиль (живі емоції, динаміка, звернення до глядачів)",
@@ -103,20 +191,20 @@ class PyVoiceApp(tk.Tk):
             "Власний стиль"
         ]
         style_cb = ttk.Combobox(ai_group, textvariable=self.style_var, values=styles, state="normal", width=42)
-        style_cb.grid(row=2, column=1, columnspan=3, padx=5, pady=2, sticky="we")
+        style_cb.grid(row=3, column=1, columnspan=3, padx=5, pady=2, sticky="we")
 
-        # Рядок 3: Додаткові опції (Чекбокси)
+        # Рядок 4: Додаткові опції (Чекбокси)
         opts_frame = ttk.Frame(ai_group)
-        opts_frame.grid(row=3, column=0, columnspan=4, sticky="we", pady=3)
+        opts_frame.grid(row=4, column=0, columnspan=4, sticky="we", pady=3)
         
         ttk.Checkbutton(opts_frame, text="👋 Привітання на початку (00:01)", variable=self.include_intro_var).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Checkbutton(opts_frame, text="💡 Пояснювати призначення та користь функцій", variable=self.explain_purpose_var).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Checkbutton(opts_frame, text="🏁 Підсумок у кінці", variable=self.include_outro_var).pack(side=tk.LEFT)
 
-        # Рядок 4: Додаткові побажання
-        ttk.Label(ai_group, text="Додаткові побажання:").grid(row=4, column=0, sticky="w", pady=2)
+        # Рядок 5: Додаткові побажання
+        ttk.Label(ai_group, text="Додаткові побажання:").grid(row=5, column=0, sticky="w", pady=2)
         entry_notes = ttk.Entry(ai_group, textvariable=self.custom_notes_var, width=45)
-        entry_notes.grid(row=4, column=1, columnspan=3, padx=5, pady=2, sticky="we")
+        entry_notes.grid(row=5, column=1, columnspan=3, padx=5, pady=2, sticky="we")
 
         ai_group.columnconfigure(1, weight=1)
 
@@ -200,38 +288,58 @@ class PyVoiceApp(tk.Tk):
 
         render_group.columnconfigure(1, weight=1)
 
-        # -------------------------------------------------------------
-        # СЕКЦІЯ 5: Інтерактивний Status Bar (UX/UI Friendly)
-        # -------------------------------------------------------------
-        status_bar = ttk.Frame(main_frame, padding="5", relief="groove")
-        status_bar.pack(fill=tk.X, side=tk.BOTTOM)
-        
-        status_bar.bind("<Double-Button-1>", lambda e: self.open_log_window())
+    def open_task_spec_editor(self):
+        """Відкриває повнорозмірне вікно редагування та налаштування Технічного Завдання (ТЗ)"""
+        TaskSpecDialog(self, self.task_spec_text, self.on_task_spec_saved)
 
-        self.progress_bar = ttk.Progressbar(status_bar, mode='indeterminate', length=110)
-        self.progress_bar.pack(side=tk.RIGHT, padx=(8, 0))
+    def on_task_spec_saved(self, new_text: str):
+        """Зберігає оновлений текст ТЗ та оновлює статус у головному вікні"""
+        self.task_spec_text = new_text.strip()
+        self.update_task_spec_ui()
+        if self.task_spec_text:
+            chars = len(self.task_spec_text)
+            words = len(self.task_spec_text.split())
+            self.log_message(f"📋 Технічне завдання оновлено ({chars:,} симв., {words:,} слів).")
+        else:
+            self.log_message("📋 Технічне завдання очищено.")
 
-        btn_open_logs = ttk.Button(status_bar, text="📜 Журнал логів", command=self.open_log_window)
-        btn_open_logs.pack(side=tk.RIGHT, padx=(4, 0))
-
-        self.status_label = ttk.Label(
-            status_bar, 
-            textvariable=self.status_var, 
-            font=("Segoe UI", 9, "bold"),
-            anchor="w",
-            cursor="hand2"
+    def browse_task_spec_file(self):
+        """Завантажує файл ТЗ напряму з диску"""
+        filename = filedialog.askopenfilename(
+            filetypes=[
+                ("Текстові та Markdown файли", "*.txt *.md *.markdown *.json *.yaml *.yml *.log *.docx"),
+                ("Усі файли", "*.*")
+            ]
         )
-        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.status_label.bind("<Double-Button-1>", lambda e: self.open_log_window())
-        
-        hint_label = ttk.Label(
-            status_bar, 
-            text=" (двічі клікніть для деталей)", 
-            font=("Segoe UI", 8, "italic"),
-            foreground="#888888"
-        )
-        hint_label.pack(side=tk.LEFT)
-        hint_label.bind("<Double-Button-1>", lambda e: self.open_log_window())
+        if filename:
+            try:
+                with open(filename, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                self.on_task_spec_saved(content)
+                self.log_message(f"📂 Завантажено ТЗ з файлу: {os.path.basename(filename)}")
+            except Exception as e:
+                messagebox.showerror("Помилка", f"Не вдалося відкрити файл ТЗ:\n{str(e)}")
+
+    def clear_task_spec(self):
+        """Очищує прикріплене ТЗ"""
+        self.task_spec_text = ""
+        self.update_task_spec_ui()
+        self.log_message("📋 Технічне завдання видалено.")
+
+    def update_task_spec_ui(self):
+        """Оновлює індикатор статусу ТЗ у головному вікні"""
+        if self.task_spec_text:
+            chars = len(self.task_spec_text)
+            words = len(self.task_spec_text.split())
+            self.task_spec_status_label.config(
+                text=f"🟢 ТЗ активно ({chars:,} симв., {words:,} слів)",
+                foreground="#1b7a2b"
+            )
+        else:
+            self.task_spec_status_label.config(
+                text="⚪ ТЗ не додано",
+                foreground="#777777"
+            )
 
     def open_script_editor(self):
         """Відкриває повнорозмірне модальне вікно для зручного редагування та валідації JSON"""
@@ -313,8 +421,8 @@ class PyVoiceApp(tk.Tk):
             try:
                 with open(filename, "r", encoding="utf-8") as f:
                     content = f.read()
-                    self.script_text.delete("1.0", tk.END)
-                    self.script_text.insert(tk.END, content)
+                self.script_text.delete("1.0", tk.END)
+                self.script_text.insert(tk.END, content)
                 self.log_message(f"📂 Завантажено сценарій з {os.path.basename(filename)}")
             except Exception as e:
                 messagebox.showerror("Помилка", f"Не вдалося відкрити файл:\n{str(e)}")
@@ -350,6 +458,7 @@ class PyVoiceApp(tk.Tk):
         video_path = self.input_video_path.get().strip()
         style_preset = self.style_var.get().strip()
         video_topic = self.video_topic_var.get().strip()
+        task_spec = self.task_spec_text.strip()
         custom_notes = self.custom_notes_var.get().strip()
         include_intro = self.include_intro_var.get()
         explain_purpose = self.explain_purpose_var.get()
@@ -372,18 +481,19 @@ class PyVoiceApp(tk.Tk):
 
         thread = threading.Thread(
             target=self.run_ai_analysis_thread, 
-            args=(api_key, video_path, style_preset, video_topic, include_intro, explain_purpose, include_outro, custom_notes),
+            args=(api_key, video_path, style_preset, video_topic, task_spec, include_intro, explain_purpose, include_outro, custom_notes),
             daemon=True
         )
         thread.start()
 
-    def run_ai_analysis_thread(self, api_key, video_path, style_preset, video_topic, include_intro, explain_purpose, include_outro, custom_notes):
+    def run_ai_analysis_thread(self, api_key, video_path, style_preset, video_topic, task_spec, include_intro, explain_purpose, include_outro, custom_notes):
         try:
             items = analyze_video(
                 api_key=api_key,
                 video_path=video_path,
                 style_preset=style_preset,
                 video_topic=video_topic,
+                task_spec=task_spec,
                 include_intro=include_intro,
                 explain_purpose=explain_purpose,
                 include_outro=include_outro,
