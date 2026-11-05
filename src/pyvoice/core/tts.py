@@ -228,7 +228,7 @@ def generate_single_gemini_speech_with_retry(
     output_path: str,
     replica_num: int,
     log_callback: Callable[[str], None],
-    max_retries: int = 8,
+    max_retries: int = 3,
     retry_pause_seconds: int = 10
 ) -> Tuple[bool, str]:
     """
@@ -403,7 +403,7 @@ async def generate_speech_chunks(
                     output_path=big_audio_file,
                     replica_num=b_idx + 1,
                     log_callback=log_callback,
-                    max_retries=8,
+                    max_retries=3,
                     retry_pause_seconds=10
                 )
 

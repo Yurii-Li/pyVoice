@@ -362,12 +362,12 @@ def analyze_video(
     include_outro: bool = True,
     custom_notes: str = "",
     log_callback: Callable[[str], None] = print,
-    max_retries: int = 8,
+    max_retries: int = 3,
     retry_pause_seconds: int = 10
 ) -> List[Dict[str, str]]:
     """
     Аналізує дії у відео через каскад моделей Gemini (від найкращої до резервних)
-    з 8 повторними спробами та миттєвим перемиканням при добовому ліміті.
+    з 3 повторними спробами та миттєвим перемиканням при добовому ліміті.
     """
     api_key = api_key.strip()
     if not api_key:
