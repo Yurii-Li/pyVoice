@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -23,9 +26,9 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Download Whisper engine & model
+    - name: Ensure bin directory exists
       run: |
-        python -c "from pyvoice.core.tts import align_and_split_with_whisper; print('Binaries checked')"
+        mkdir -p bin
 
     - name: Build Single Executable with PyInstaller
       run: |
