@@ -16,7 +16,6 @@ config.json
 # PyInstaller & Build artifacts
 build/
 dist/
-*.spec
 
 # Downloaded Binaries (FFmpeg, ffprobe тощо)
 bin/
