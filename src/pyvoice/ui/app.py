@@ -17,6 +17,9 @@ from pyvoice.ui.script_editor import ScriptEditorWindow
 from pyvoice.ui.task_spec_dialog import TaskSpecDialog
 from pyvoice.ui.video_tools_window import TimelineVideoEditorWindow, VideoToolsWindow
 from pyvoice.ui.shortcuts import enable_universal_shortcuts
+from pyvoice.ui.update_dialog import UpdateDialog
+from pyvoice.core.updater import check_for_updates
+from pyvoice import __version__
 
 class PyVoiceApp(tk.Tk):
     def __init__(self):
@@ -68,6 +71,9 @@ class PyVoiceApp(tk.Tk):
         # Автоматичне збереження API ключа при введенні / вставці
         self.api_key_var.trace_add("write", lambda *a: save_api_key(self.api_key_var.get()))
 
+        # Тиха перевірка оновлень при запуску через 2 секунди
+        self.after(2000, lambda: self.check_updates_background(manual=False))
+
     def open_api_key_url(self):
         webbrowser.open("https://aistudio.google.com/app/apikey")
 
@@ -85,6 +91,13 @@ class PyVoiceApp(tk.Tk):
 
         btn_open_logs = ttk.Button(status_bar, text="📜 Журнал логів", command=self.open_log_window)
         btn_open_logs.pack(side=tk.RIGHT, padx=(4, 0))
+
+        self.btn_update_check = ttk.Button(
+            status_bar, 
+            text=f"🔄 v{__version__}", 
+            command=lambda: self.check_updates_background(manual=True)
+        )
+        self.btn_update_check.pack(side=tk.RIGHT, padx=(4, 0))
 
         self.status_label = ttk.Label(
             status_bar, 
@@ -581,3 +594,39 @@ class PyVoiceApp(tk.Tk):
                 self.after(0, lambda: messagebox.showerror("Помилка монтажу", error_str))
         finally:
             self.set_ui_busy(False)
+
+    def check_updates_background(self, manual: bool = False):
+        """Перевіряє оновлення у фоновому потоці, щоб інтерфейс не зависав"""
+        if manual:
+            self.btn_update_check.config(text="🔄 Перевірка...", state="disabled")
+
+        def _worker():
+            try:
+                update_info = check_for_updates(__version__)
+                self.after(0, lambda: self._on_check_updates_complete(update_info, manual))
+            except Exception as e:
+                self.after(0, lambda: self._on_check_updates_error(str(e), manual))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_check_updates_complete(self, update_info, manual: bool):
+        self.btn_update_check.config(text=f"🔄 v{__version__}", state="normal")
+        if update_info.has_update:
+            self.btn_update_check.config(text=f"🚀 Оновити ({update_info.latest_version})")
+            # Відкриваємо модальне вікно оновлення
+            UpdateDialog(self, update_info)
+        else:
+            if manual:
+                messagebox.showinfo(
+                    "Оновлення", 
+                    f"У вас встановлена найновіша версія PyVoice AI (v{__version__})! 🎉"
+                )
+
+    def _on_check_updates_error(self, err_msg: str, manual: bool):
+        self.btn_update_check.config(text=f"🔄 v{__version__}", state="normal")
+        if manual:
+            messagebox.showwarning(
+                "Перевірка оновлень", 
+                f"Не вдалося перевірити оновлення на GitHub:\n{err_msg}"
+            )
+
