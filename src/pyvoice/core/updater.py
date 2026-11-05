@@ -78,18 +78,19 @@ def download_and_apply_update(
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> None:
     """
-    Завантажує новий EXE у тимчасовий файл і запускає процес безшовної заміни та перезапуску.
+    Завантажує новий EXE у тимчасовий файл і запускає процес заміни та перезапуску.
     """
     if not getattr(sys, 'frozen', False):
         raise RuntimeError("Оновлення EXE доступне лише у зібраній версії програми (.exe). У режимі розробки використовуйте git pull.")
 
     current_exe = os.path.abspath(sys.executable)
+    exe_dir = os.path.dirname(current_exe)
     temp_dir = tempfile.mkdtemp(prefix="pyvoice_update_")
     new_exe_path = os.path.join(temp_dir, "PyVoiceAI_new.exe")
 
-    # 1. Завантаження файлу частинами з прогресом
+    # 1. Завантаження файлу частинами з відстеженням прогресу
     headers = {"User-Agent": "PyVoiceAI-Updater"}
-    with requests.get(download_url, headers=headers, stream=True, timeout=60) as resp:
+    with requests.get(download_url, headers=headers, stream=True, timeout=120) as resp:
         resp.raise_for_status()
         total_length = int(resp.headers.get('content-length', 0))
         downloaded = 0
@@ -102,41 +103,45 @@ def download_and_apply_update(
                     if progress_callback and total_length > 0:
                         progress_callback(downloaded, total_length)
 
-    # 2. Створення батника для заміни та перезапуску програми
-    # Оскільки запущений EXE заблокований ОС Windows, батник чекає на закриття процесу,
-    # замінює старий EXE новим, запускає оновлений додаток і самознищується.
-    bat_path = os.path.join(temp_dir, "apply_update.bat")
+    # 2. Надійний скрипт оновлення PowerShell
+    # Використовує Wait-Process для гарантованого очікування завершення старого процесу
+    pid = os.getpid()
+    ps1_path = os.path.join(temp_dir, "update.ps1")
     
-    bat_content = f"""@echo off
-setlocal
-set "OLD_EXE={current_exe}"
-set "NEW_EXE={new_exe_path}"
-set "TEMP_DIR={temp_dir}"
+    ps_script = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+# Чекаємо повного закриття процесу PyVoiceAI
+Wait-Process -Id {pid} -Timeout 10
+Start-Sleep -Seconds 1
 
-:: Чекаємо 1.5 секунди до повного виходу старого процесу
-timeout /t 2 /nobreak >nul
+# Замінюємо старий exe оновленим
+$retries = 0
+while ($retries -lt 10) {{
+    try {{
+        Copy-Item -Path '{new_exe_path}' -Destination '{current_exe}' -Force
+        break
+    }} catch {{
+        Start-Sleep -Seconds 1
+        $retries++
+    }}
+}}
 
-:RETRY_MOVE
-move /y "%NEW_EXE%" "%OLD_EXE%" >nul 2>&1
-if errorlevel 1 (
-    timeout /t 1 /nobreak >nul
-    goto RETRY_MOVE
-)
+# Запускаємо оновлений додаток
+Start-Process -FilePath '{current_exe}'
 
-:: Запуск оновленої програми
-start "" "%OLD_EXE%"
-
-:: Очищення тимчасової папки та батника
-rmdir /s /q "%TEMP_DIR%" >nul 2>&1
-(goto) 2>nul & del "%~f0"
+# Прибираємо тимчасові файли
+Start-Sleep -Seconds 2
+Remove-Item -Path '{temp_dir}' -Recurse -Force
 """
 
-    with open(bat_path, "w", encoding="cp1251") as f:
-        f.write(bat_content)
+    with open(ps1_path, "w", encoding="utf-8") as f:
+        f.write(ps_script)
 
-    # 3. Запуск батника у фоні без консольного вікна
-    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    subprocess.Popen(["cmd.exe", "/c", bat_path], creationflags=creationflags)
+    # 3. Запуск PowerShell у фоновому автономному процесі
+    subprocess.Popen(
+        ["powershell.exe", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps1_path],
+        creationflags=subprocess.DETACHED_PROCESS if sys.platform == "win32" else 0
+    )
 
-    # 4. Завершення поточної програми
-    sys.exit(0)
+    # 4. Примусове та миттєве закриття поточної програми, щоб звільнити файл .exe
+    os._exit(0)

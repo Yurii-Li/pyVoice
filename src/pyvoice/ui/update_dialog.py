@@ -17,8 +17,8 @@ class UpdateDialog(tk.Toplevel):
     def __init__(self, parent, update_info: UpdateInfo):
         super().__init__(parent)
         self.title("🚀 Доступне оновлення - PyVoice AI")
-        self.geometry("540x400")
-        self.minsize(480, 350)
+        self.geometry("540x420")
+        self.minsize(480, 360)
         self.resizable(True, True)
 
         self.parent = parent
@@ -32,7 +32,7 @@ class UpdateDialog(tk.Toplevel):
         # Центрування
         try:
             x = parent.winfo_x() + (parent.winfo_width() // 2) - 270
-            y = parent.winfo_y() + (parent.winfo_height() // 2) - 200
+            y = parent.winfo_y() + (parent.winfo_height() // 2) - 210
             self.geometry(f"+{max(0, x)}+{max(0, y)}")
         except Exception:
             pass
@@ -166,6 +166,7 @@ class UpdateDialog(tk.Toplevel):
                 mb_total = total / (1024 * 1024)
                 self.after(0, lambda: self._update_ui_progress(pct, mb_down, mb_total))
 
+            self.after(0, lambda: self.status_label.config(text="Завантаження завершено! Перезапуск програми..."))
             download_and_apply_update(
                 self.update_info.download_url, 
                 progress_callback=on_progress
@@ -175,7 +176,10 @@ class UpdateDialog(tk.Toplevel):
 
     def _update_ui_progress(self, percent: int, downloaded_mb: float, total_mb: float):
         self.progress_bar['value'] = percent
-        self.status_label.config(text=f"Завантаження: {percent}% ({downloaded_mb:.1f} / {total_mb:.1f} МБ)")
+        if percent >= 100:
+            self.status_label.config(text="Встановлення та перезапуск оновленої програми...")
+        else:
+            self.status_label.config(text=f"Завантаження: {percent}% ({downloaded_mb:.1f} / {total_mb:.1f} МБ)")
 
     def _handle_error(self, err_msg: str):
         self.is_downloading = False
