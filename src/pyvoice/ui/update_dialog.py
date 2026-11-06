@@ -2,17 +2,19 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
 import sys
+import os
+import tempfile
 import webbrowser
 from typing import Optional
-from pyvoice.core.updater import UpdateInfo, download_and_apply_update
+from pyvoice.core.updater import UpdateInfo, download_update_file, launch_updater_and_exit
 
 class UpdateDialog(tk.Toplevel):
     """
     Зручне діалогове вікно оновлення програми:
     - Показує поточну та нову версії
     - Відображає список змін (Release Notes)
-    - Має прогрес-бар завантаження
-    - Автоматично перезапускає програму
+    - Має плавний прогрес-бар завантаження
+    - Автоматично замінює та перезапускає програму
     """
     def __init__(self, parent, update_info: UpdateInfo):
         super().__init__(parent)
@@ -160,26 +162,39 @@ class UpdateDialog(tk.Toplevel):
 
     def _download_worker(self):
         try:
+            temp_dir = tempfile.mkdtemp(prefix="pyvoice_upd_")
+            new_exe_path = os.path.join(temp_dir, "PyVoiceAI_new.exe")
+            current_exe = os.path.abspath(sys.executable)
+            pid = os.getpid()
+
             def on_progress(downloaded: int, total: int):
                 pct = int((downloaded / total) * 100) if total > 0 else 0
                 mb_down = downloaded / (1024 * 1024)
                 mb_total = total / (1024 * 1024)
                 self.after(0, lambda: self._update_ui_progress(pct, mb_down, mb_total))
 
-            self.after(0, lambda: self.status_label.config(text="Завантаження завершено! Перезапуск програми..."))
-            download_and_apply_update(
-                self.update_info.download_url, 
+            # 1. Завантаження у фоновому потоці
+            download_update_file(
+                self.update_info.download_url,
+                target_path=new_exe_path,
                 progress_callback=on_progress
             )
+
+            # 2. Повідомляємо інтерфейс про успішне завантаження і передаємо керування на заміну
+            self.after(0, lambda: self._trigger_restart(new_exe_path, current_exe, pid))
+
         except Exception as e:
             self.after(0, lambda: self._handle_error(str(e)))
 
+    def _trigger_restart(self, new_exe_path: str, current_exe: str, pid: int):
+        self.status_label.config(text="✅ Завантажено 100%! Перезапуск оновленої програми...")
+        self.update_idletasks()
+        # Запускаємо процес оновлення через 300мс і миттєво виходимо
+        self.after(300, lambda: launch_updater_and_exit(new_exe_path, current_exe, pid))
+
     def _update_ui_progress(self, percent: int, downloaded_mb: float, total_mb: float):
-        self.progress_bar['value'] = percent
-        if percent >= 100:
-            self.status_label.config(text="Встановлення та перезапуск оновленої програми...")
-        else:
-            self.status_label.config(text=f"Завантаження: {percent}% ({downloaded_mb:.1f} / {total_mb:.1f} МБ)")
+        self.progress_bar['value'] = min(percent, 100)
+        self.status_label.config(text=f"Завантаження: {percent}% ({downloaded_mb:.1f} / {total_mb:.1f} МБ)")
 
     def _handle_error(self, err_msg: str):
         self.is_downloading = False

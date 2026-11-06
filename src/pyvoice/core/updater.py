@@ -21,7 +21,6 @@ class UpdateInfo:
     asset_size: int
 
 def parse_version_tuple(v_str: str) -> Tuple[int, ...]:
-    """Конвертує версію 'v1.4.0' у кортеж чисел (1, 4, 0) для коректного порівняння"""
     clean = v_str.strip().lstrip("vV")
     parts = []
     for chunk in clean.split("."):
@@ -33,10 +32,6 @@ def parse_version_tuple(v_str: str) -> Tuple[int, ...]:
     return tuple(parts)
 
 def check_for_updates(current_version: str) -> UpdateInfo:
-    """
-    Перевіряє наявність новішого релізу на GitHub Releases.
-    Повертає об'єкт UpdateInfo з посиланням на EXE та списком змін.
-    """
     headers = {"User-Agent": "PyVoiceAI-Updater"}
     res = requests.get(GITHUB_API_LATEST, headers=headers, timeout=10)
     if res.status_code != 200:
@@ -73,75 +68,83 @@ def check_for_updates(current_version: str) -> UpdateInfo:
         asset_size=asset_size
     )
 
-def download_and_apply_update(
+def download_update_file(
     download_url: str,
+    target_path: str,
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> None:
-    """
-    Завантажує новий EXE у тимчасовий файл і запускає процес заміни та перезапуску.
-    """
-    if not getattr(sys, 'frozen', False):
-        raise RuntimeError("Оновлення EXE доступне лише у зібраній версії програми (.exe). У режимі розробки використовуйте git pull.")
-
-    current_exe = os.path.abspath(sys.executable)
-    exe_dir = os.path.dirname(current_exe)
-    temp_dir = tempfile.mkdtemp(prefix="pyvoice_update_")
-    new_exe_path = os.path.join(temp_dir, "PyVoiceAI_new.exe")
-
-    # 1. Завантаження файлу частинами з відстеженням прогресу
+    """Завантажує файл релізу частинами з оновленням прогресу"""
     headers = {"User-Agent": "PyVoiceAI-Updater"}
-    with requests.get(download_url, headers=headers, stream=True, timeout=120) as resp:
+    with requests.get(download_url, headers=headers, stream=True, timeout=180) as resp:
         resp.raise_for_status()
         total_length = int(resp.headers.get('content-length', 0))
         downloaded = 0
 
-        with open(new_exe_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=65536):
+        with open(target_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=131072):
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
                     if progress_callback and total_length > 0:
                         progress_callback(downloaded, total_length)
 
-    # 2. Надійний скрипт оновлення PowerShell
-    # Використовує Wait-Process для гарантованого очікування завершення старого процесу
-    pid = os.getpid()
-    ps1_path = os.path.join(temp_dir, "update.ps1")
-    
-    ps_script = f"""
-$ErrorActionPreference = 'SilentlyContinue'
-# Чекаємо повного закриття процесу PyVoiceAI
-Wait-Process -Id {pid} -Timeout 10
-Start-Sleep -Seconds 1
+def launch_updater_and_exit(new_exe_path: str, current_exe: str, pid: int) -> None:
+    """
+    Запускає надійний автономний батник у Windows cmd.exe,
+    який очікує завершення процесу PyVoiceAI, замінює EXE і запускає нову версію.
+    """
+    temp_dir = os.path.dirname(new_exe_path)
+    bat_path = os.path.join(temp_dir, "run_update.bat")
 
-# Замінюємо старий exe оновленим
-$retries = 0
-while ($retries -lt 10) {{
-    try {{
-        Copy-Item -Path '{new_exe_path}' -Destination '{current_exe}' -Force
-        break
-    }} catch {{
-        Start-Sleep -Seconds 1
-        $retries++
-    }}
-}}
+    # Батник cmd.exe працює на будь-якому Windows без обмежень ExecutionPolicy чи блокувань PowerShell
+    bat_script = f"""@echo off
+setlocal
+set "PID={pid}"
+set "OLD_EXE={current_exe}"
+set "NEW_EXE={new_exe_path}"
+set "TMP_DIR={temp_dir}"
 
-# Запускаємо оновлений додаток
-Start-Process -FilePath '{current_exe}'
+:: 1. Чекаємо поки старий процес завершиться
+:WAIT_LOOP
+tasklist /fi "PID eq %PID%" 2>nul | find "%PID%" >nul
+if not errorlevel 1 (
+    timeout /t 1 /nobreak >nul
+    goto WAIT_LOOP
+)
 
-# Прибираємо тимчасові файли
-Start-Sleep -Seconds 2
-Remove-Item -Path '{temp_dir}' -Recurse -Force
+:: Коротка пауза, щоб Windows повністю звільнила дескриптор файлу
+timeout /t 1 /nobreak >nul
+
+:: 2. Заміна старого файлу новим із повторними спробами
+:COPY_LOOP
+copy /y "%NEW_EXE%" "%OLD_EXE%" >nul 2>&1
+if errorlevel 1 (
+    timeout /t 1 /nobreak >nul
+    goto COPY_LOOP
+)
+
+:: 3. Запуск оновленої програми
+start "" "%OLD_EXE%"
+
+:: 4. Очищення тимчасових файлів
+del /f /q "%NEW_EXE%" >nul 2>&1
+(goto) 2>nul & del "%~f0"
+exit
 """
 
-    with open(ps1_path, "w", encoding="utf-8") as f:
-        f.write(ps_script)
+    with open(bat_path, "w", encoding="cp1251") as f:
+        f.write(bat_script)
 
-    # 3. Запуск PowerShell у фоновому автономному процесі
+    # Запускаємо cmd.exe повністю від'єднаним від поточного процесу (CREATE_NEW_PROCESS_GROUP + DETACHED)
+    flags = 0
+    if sys.platform == "win32":
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+
     subprocess.Popen(
-        ["powershell.exe", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps1_path],
-        creationflags=subprocess.DETACHED_PROCESS if sys.platform == "win32" else 0
+        ["cmd.exe", "/c", bat_path],
+        creationflags=flags,
+        close_fds=True
     )
 
-    # 4. Примусове та миттєве закриття поточної програми, щоб звільнити файл .exe
+    # Миттєвий вихід з процесу на рівні ядра ОС
     os._exit(0)
