@@ -1,16 +1,19 @@
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import threading
-import time
 import os
 import tempfile
+import threading
+import time
+from typing import Callable, Dict, List, Optional, Tuple
+
+import customtkinter as ctk
 import cv2
 from PIL import Image, ImageTk
-from typing import List, Optional, Tuple, Callable, Dict
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 import pygame
 
+from pyvoice.ui.shortcuts import bring_to_front
 from pyvoice.core.video import get_media_duration_seconds
 from pyvoice.core.video_tools import (
     TimelineClip, 
@@ -25,9 +28,9 @@ def format_time_str(seconds: float) -> str:
     ms = int((seconds - int(seconds)) * 10)
     return f"{m:02d}:{s:02d}.{ms}"
 
-class TimelineVideoEditorWindow(tk.Toplevel):
+class TimelineVideoEditorWindow(ctk.CTkToplevel):
     """
-    Повнофункціональний візуальний відеомонтажер:
+    Повнофункціональний візуальний відеомонтажер у стилі CustomTkinter:
     - Плавне відтворення відео у реальному часі (30-60 FPS)
     - Синхронізована аудіодоріжка (звук з відео через pygame.mixer)
     - Графічний таймлайн із ножицями (Split) та зміною порядку фрагментів
@@ -36,9 +39,8 @@ class TimelineVideoEditorWindow(tk.Toplevel):
     def __init__(self, parent, initial_video_path: str = "", on_use_video_callback: Optional[Callable[[str], None]] = None):
         super().__init__(parent)
         self.title("🎬 Візуальний Відео-Монтажер з Таймлайном та Звуком - PyVoice AI")
-        self.geometry("980x720")
-        self.minsize(850, 600)
-        self.resizable(True, True)
+        self.geometry("1020x750")
+        self.minsize(880, 620)
         
         self.parent = parent
         self.on_use_video_callback = on_use_video_callback
@@ -52,8 +54,8 @@ class TimelineVideoEditorWindow(tk.Toplevel):
 
         # Центрування вікна
         try:
-            x = parent.winfo_x() + (parent.winfo_width() // 2) - 490
-            y = parent.winfo_y() + (parent.winfo_height() // 2) - 360
+            x = parent.winfo_x() + (parent.winfo_width() // 2) - 510
+            y = parent.winfo_y() + (parent.winfo_height() // 2) - 375
             self.geometry(f"+{max(0, x)}+{max(0, y)}")
         except Exception:
             pass
@@ -93,85 +95,101 @@ class TimelineVideoEditorWindow(tk.Toplevel):
         self.bind("<Delete>", lambda e: self.delete_selected_clip())
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.lift()
-        self.focus_force()
+        bring_to_front(self, parent)
 
     def create_ui(self):
+        self.configure(fg_color=("#f8fafc", "#090d16"))
+
         # 1. Верхня панель інструментів (Toolbar)
-        toolbar = ttk.Frame(self, padding="6")
-        toolbar.pack(fill=tk.X, side=tk.TOP)
+        toolbar = ctk.CTkFrame(
+            self, 
+            fg_color=("#ffffff", "#0e1424"), 
+            border_color=("#e2e8f0", "#1e293b"), 
+            border_width=1, 
+            corner_radius=0, 
+            height=54
+        )
+        toolbar.pack(fill=tk.X, side=tk.TOP, padx=0, pady=0)
 
-        ttk.Button(toolbar, text="➕ Додати відео на таймлайн", command=self.browse_add_videos).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(toolbar, text="✂️ Розрізати по курсору (S)", command=self.split_at_playhead).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(toolbar, text="🗑 Видалити фрагмент (Del)", command=self.delete_selected_clip).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(toolbar, text="⬅ Вліво", command=self.move_clip_left).pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Button(toolbar, text="➡ Вправо", command=self.move_clip_right).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(toolbar, text="🧹 Очистити таймлайн", command=self.clear_timeline).pack(side=tk.LEFT)
+        left_tools = ctk.CTkFrame(toolbar, fg_color="transparent")
+        left_tools.pack(side=tk.LEFT, padx=14, pady=8)
 
-        # Кнопка 'Експорт' з лаконічною назвою
-        self.btn_export = ttk.Button(toolbar, text="💾 Експорт", command=self.export_timeline)
-        self.btn_export.pack(side=tk.RIGHT)
+        ctk.CTkButton(left_tools, text="➕ Додати відео", height=32, width=125, corner_radius=8, command=self.browse_add_videos, fg_color="#2563eb", hover_color="#1d4ed8", font=ctk.CTkFont(weight="bold")).pack(side=tk.LEFT, padx=(0, 6))
+        ctk.CTkButton(left_tools, text="✂️ Розрізати (S)", height=32, width=115, corner_radius=8, command=self.split_at_playhead, fg_color=("#f1f5f9", "#1e293b"), hover_color=("#e2e8f0", "#334155"), text_color=("#0f172a", "#f1f5f9"), border_width=1, border_color=("#cbd5e1", "#334155")).pack(side=tk.LEFT, padx=(0, 6))
+        ctk.CTkButton(left_tools, text="🗑 Видалити (Del)", height=32, width=115, corner_radius=8, command=self.delete_selected_clip, fg_color=("#ef4444", "#dc2626"), hover_color=("#dc2626", "#b91c1c")).pack(side=tk.LEFT, padx=(0, 6))
+        ctk.CTkButton(left_tools, text="⬅ Вліво", height=32, width=80, corner_radius=8, command=self.move_clip_left, fg_color=("#f1f5f9", "#1e293b"), hover_color=("#e2e8f0", "#334155"), text_color=("#0f172a", "#f1f5f9"), border_width=1, border_color=("#cbd5e1", "#334155")).pack(side=tk.LEFT, padx=(0, 4))
+        ctk.CTkButton(left_tools, text="➡ Вправо", height=32, width=80, corner_radius=8, command=self.move_clip_right, fg_color=("#f1f5f9", "#1e293b"), hover_color=("#e2e8f0", "#334155"), text_color=("#0f172a", "#f1f5f9"), border_width=1, border_color=("#cbd5e1", "#334155")).pack(side=tk.LEFT, padx=(0, 10))
+        ctk.CTkButton(left_tools, text="🧹 Очистити", height=32, width=90, corner_radius=8, command=self.clear_timeline, fg_color="transparent", border_width=1, text_color=("#64748b", "#94a3b8"), border_color=("#cbd5e1", "#334155")).pack(side=tk.LEFT)
+
+        # Кнопка 'Експорт'
+        self.btn_export = ctk.CTkButton(toolbar, text="💾 Експорт", height=34, width=135, corner_radius=8, font=("Segoe UI", 12, "bold"), fg_color="#059669", hover_color="#10b981", command=self.export_timeline)
+        self.btn_export.pack(side=tk.RIGHT, padx=14, pady=8)
 
         # 2. Центральна область: Відеоплеєр
-        player_container = tk.Frame(self, bg="#181818")
-        player_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(4, 6))
+        player_container = ctk.CTkFrame(self, fg_color=("#e2e8f0", "#020617"), corner_radius=12, border_color=("#cbd5e1", "#1e293b"), border_width=1)
+        player_container.pack(fill=tk.BOTH, expand=True, padx=14, pady=(8, 6))
 
         self.video_canvas = tk.Label(
             player_container, 
-            bg="#111111", 
+            bg="#020617", 
             text="🎬 Додайте відео для початку монтажу на таймлайні\n\n(Керування: Пробіл - Play/Pause, S - Ножиці, Del - Видалити)", 
-            fg="#888888",
+            fg="#94a3b8",
             font=("Segoe UI", 11)
         )
-        self.video_canvas.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self.video_canvas.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
-        controls_frame = tk.Frame(player_container, bg="#222222", height=40)
-        controls_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=4, pady=(0, 4))
+        controls_frame = ctk.CTkFrame(player_container, fg_color=("#ffffff", "#0e1424"), height=46, corner_radius=10, border_color=("#e2e8f0", "#1e293b"), border_width=1)
+        controls_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=6, pady=(0, 6))
 
-        self.time_label = tk.Label(
+        self.time_label = ctk.CTkLabel(
             controls_frame, 
             text="⏱ 00:00.0 / 00:00.0", 
-            font=("Consolas", 11, "bold"), 
-            bg="#222222", 
-            fg="#00e5ff"
+            font=("Consolas", 12, "bold"), 
+            text_color="#0284c7"
         )
-        self.time_label.pack(side=tk.LEFT, padx=10)
+        self.time_label.pack(side=tk.LEFT, padx=14)
 
-        center_btns = tk.Frame(controls_frame, bg="#222222")
+        center_btns = ctk.CTkFrame(controls_frame, fg_color="transparent")
         center_btns.pack(side=tk.LEFT, expand=True)
 
-        tk.Button(center_btns, text="⏮ На початок", bg="#333333", fg="#ffffff", relief="flat", command=self.seek_start).pack(side=tk.LEFT, padx=2)
-        tk.Button(center_btns, text="⏪ -1с", bg="#333333", fg="#ffffff", relief="flat", command=lambda: self.seek_relative(-1.0)).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(center_btns, text="⏮ На початок", width=85, height=28, corner_radius=6, fg_color=("#f1f5f9", "#1e293b"), hover_color=("#e2e8f0", "#334155"), text_color=("#0f172a", "#f1f5f9"), border_width=1, border_color=("#cbd5e1", "#334155"), command=self.seek_start).pack(side=tk.LEFT, padx=3)
+        ctk.CTkButton(center_btns, text="⏪ -1с", width=60, height=28, corner_radius=6, fg_color=("#f1f5f9", "#1e293b"), hover_color=("#e2e8f0", "#334155"), text_color=("#0f172a", "#f1f5f9"), border_width=1, border_color=("#cbd5e1", "#334155"), command=lambda: self.seek_relative(-1.0)).pack(side=tk.LEFT, padx=3)
         
-        self.btn_play = tk.Button(center_btns, text=" ▶ ВІДТВОРИТИ ", bg="#0078d7", fg="#ffffff", font=("Segoe UI", 9, "bold"), relief="flat", command=self.toggle_play)
-        self.btn_play.pack(side=tk.LEFT, padx=6)
+        self.btn_play = ctk.CTkButton(center_btns, text=" ▶ ВІДТВОРИТИ ", width=130, height=30, corner_radius=6, fg_color="#2563eb", hover_color="#1d4ed8", font=("Segoe UI", 11, "bold"), command=self.toggle_play)
+        self.btn_play.pack(side=tk.LEFT, padx=8)
 
-        tk.Button(center_btns, text="⏩ +1с", bg="#333333", fg="#ffffff", relief="flat", command=lambda: self.seek_relative(1.0)).pack(side=tk.LEFT, padx=2)
-        tk.Button(center_btns, text="⏭ В кінець", bg="#333333", fg="#ffffff", relief="flat", command=self.seek_end).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(center_btns, text="⏩ +1с", width=60, height=28, corner_radius=6, fg_color=("#f1f5f9", "#1e293b"), hover_color=("#e2e8f0", "#334155"), text_color=("#0f172a", "#f1f5f9"), border_width=1, border_color=("#cbd5e1", "#334155"), command=lambda: self.seek_relative(1.0)).pack(side=tk.LEFT, padx=3)
+        ctk.CTkButton(center_btns, text="⏭ В кінець", width=85, height=28, corner_radius=6, fg_color=("#f1f5f9", "#1e293b"), hover_color=("#e2e8f0", "#334155"), text_color=("#0f172a", "#f1f5f9"), border_width=1, border_color=("#cbd5e1", "#334155"), command=self.seek_end).pack(side=tk.LEFT, padx=3)
 
-        self.clip_info_label = tk.Label(
+        self.clip_info_label = ctk.CTkLabel(
             controls_frame, 
             text="Фрагментів: 0", 
-            font=("Segoe UI", 9), 
-            bg="#222222", 
-            fg="#cccccc"
+            font=("Segoe UI", 11), 
+            text_color=("#475569", "#cbd5e1")
         )
-        self.clip_info_label.pack(side=tk.RIGHT, padx=10)
+        self.clip_info_label.pack(side=tk.RIGHT, padx=14)
 
         # 3. Нижня область: Інтерактивний Таймлайн
-        timeline_outer = ttk.LabelFrame(self, text=" 🎞️ Візуальний Таймлайн (Клікніть для переходу, тягніть червоний повзунок, 'S' - розрізати) ", padding="6")
-        timeline_outer.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=(0, 10))
+        timeline_outer = ctk.CTkFrame(self, fg_color=("#ffffff", "#0e1424"), corner_radius=12, border_color=("#e2e8f0", "#1e293b"), border_width=1)
+        timeline_outer.pack(fill=tk.X, side=tk.BOTTOM, padx=14, pady=(0, 14))
 
-        timeline_scroll_frame = ttk.Frame(timeline_outer)
-        timeline_scroll_frame.pack(fill=tk.X, expand=True)
+        ctk.CTkLabel(
+            timeline_outer, 
+            text="🎞️ Візуальний Таймлайн (Клікніть для переходу, тягніть червоний повзунок, 'S' - розрізати)", 
+            font=("Segoe UI", 11, "bold"), 
+            text_color=("#475569", "#94a3b8")
+        ).pack(anchor="w", padx=14, pady=(8, 4))
 
-        self.timeline_hscroll = ttk.Scrollbar(timeline_scroll_frame, orient=tk.HORIZONTAL)
+        timeline_scroll_frame = tk.Frame(timeline_outer, bg="#0f172a")
+        timeline_scroll_frame.pack(fill=tk.X, expand=True, padx=8, pady=(0, 8))
+
+        self.timeline_hscroll = tk.Scrollbar(timeline_scroll_frame, orient=tk.HORIZONTAL)
         self.timeline_hscroll.pack(side=tk.BOTTOM, fill=tk.X)
 
         self.timeline_canvas = tk.Canvas(
             timeline_scroll_frame, 
             height=110, 
-            bg="#1c1c1c", 
+            bg="#0f172a", 
             highlightthickness=0,
             xscrollcommand=self.timeline_hscroll.set
         )
@@ -312,11 +330,11 @@ class TimelineVideoEditorWindow(tk.Toplevel):
             self.play_start_video_time = self.current_time_sec
             self.active_playing_clip_idx = None
             
-            self.btn_play.config(text=" ⏸ ПАУЗА ", bg="#e67e22")
+            self.btn_play.configure(text=" ⏸ ПАУЗА ", fg_color="#d97706")
             self.start_audio_for_current_position()
             self.play_loop()
         else:
-            self.btn_play.config(text=" ▶ ВІДТВОРИТИ ", bg="#0078d7")
+            self.btn_play.configure(text=" ▶ ВІДТВОРИТИ ", fg_color="#2563eb")
             self.stop_audio()
 
     def start_audio_for_current_position(self):
@@ -396,8 +414,8 @@ class TimelineVideoEditorWindow(tk.Toplevel):
         total_dur = self.get_total_duration()
         cur_str = format_time_str(self.current_time_sec)
         tot_str = format_time_str(total_dur)
-        self.time_label.config(text=f"⏱ {cur_str} / {tot_str}")
-        self.clip_info_label.config(text=f"Фрагментів: {len(self.clips)}")
+        self.time_label.configure(text=f"⏱ {cur_str} / {tot_str}")
+        self.clip_info_label.configure(text=f"Фрагментів: {len(self.clips)}")
 
         if not self.clips:
             self.video_canvas.config(
@@ -564,7 +582,7 @@ class TimelineVideoEditorWindow(tk.Toplevel):
             return
         spinners = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         sym = spinners[frame_idx % len(spinners)]
-        self.btn_export.config(text=f"{sym} Експорт...")
+        self.btn_export.configure(text=f"{sym} Експорт...")
         self.after(90, lambda: self._animate_export_button(frame_idx + 1))
 
     def export_timeline(self):
@@ -585,7 +603,7 @@ class TimelineVideoEditorWindow(tk.Toplevel):
 
         # Запуск анімації лоадінгу на кнопці
         self.is_exporting = True
-        self.btn_export.config(state=tk.DISABLED)
+        self.btn_export.configure(state="disabled")
         self._animate_export_button(0)
 
         def _worker():
@@ -599,7 +617,7 @@ class TimelineVideoEditorWindow(tk.Toplevel):
 
     def _on_export_complete(self, output_file: str, error_msg: Optional[str]):
         self.is_exporting = False
-        self.btn_export.config(state=tk.NORMAL, text="💾 Експорт")
+        self.btn_export.configure(state="normal", text="💾 Експорт")
 
         if error_msg:
             messagebox.showerror("Помилка рендеру", error_msg, parent=self)

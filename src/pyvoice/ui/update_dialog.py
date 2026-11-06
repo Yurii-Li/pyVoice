@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
+import customtkinter as ctk
 import threading
 import sys
 import os
@@ -7,20 +8,20 @@ import tempfile
 import webbrowser
 from typing import Optional
 from pyvoice.core.updater import UpdateInfo, download_update_file, launch_installer_and_exit
+from pyvoice.ui.shortcuts import bring_to_front
 
-class UpdateDialog(tk.Toplevel):
+class UpdateDialog(ctk.CTkToplevel):
     """
-    Зручне діалогове вікно оновлення програми:
-    - Показує поточну та нову версії
-    - Відображає список змін (Release Notes)
-    - Має плавний прогрес-бар завантаження
+    Сучасне діалогове вікно оновлення програми на базі CustomTkinter:
+    - Відображає нову версію, розмір та опис релізу
+    - Плавний неоновий прогрес-бар завантаження
     - Автоматично оновлює додаток через Inno Setup
     """
     def __init__(self, parent, update_info: UpdateInfo):
         super().__init__(parent)
         self.title("🚀 Доступне оновлення - PyVoice AI")
-        self.geometry("540x420")
-        self.minsize(480, 360)
+        self.geometry("560x440")
+        self.minsize(500, 380)
         self.resizable(True, True)
 
         self.parent = parent
@@ -33,102 +34,145 @@ class UpdateDialog(tk.Toplevel):
 
         # Центрування
         try:
-            x = parent.winfo_x() + (parent.winfo_width() // 2) - 270
-            y = parent.winfo_y() + (parent.winfo_height() // 2) - 210
+            x = parent.winfo_x() + (parent.winfo_width() // 2) - 280
+            y = parent.winfo_y() + (parent.winfo_height() // 2) - 220
             self.geometry(f"+{max(0, x)}+{max(0, y)}")
         except Exception:
             pass
 
         self.create_widgets()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        bring_to_front(self, parent)
 
     def create_widgets(self):
-        main_frame = ttk.Frame(self, padding="15")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        self.configure(fg_color=("#f8fafc", "#090d16"))
+        main_frame = ctk.CTkFrame(
+            self, 
+            corner_radius=14,
+            fg_color=("#ffffff", "#0e1424"),
+            border_color=("#e2e8f0", "#1e293b"),
+            border_width=1
+        )
+        main_frame.pack(fill="both", expand=True, padx=14, pady=14)
 
         # 1. Шапка з іконкою
-        hdr_frame = ttk.Frame(main_frame)
-        hdr_frame.pack(fill=tk.X, pady=(0, 10))
+        hdr_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        hdr_frame.pack(fill="x", padx=16, pady=(16, 10))
 
-        ttk.Label(hdr_frame, text="🎉", font=("Segoe UI", 28)).pack(side=tk.LEFT, padx=(0, 12))
+        icon_frame = ctk.CTkFrame(hdr_frame, width=44, height=44, corner_radius=12, fg_color=("#d1fae5", "#064e3b"))
+        icon_frame.pack(side="left", padx=(0, 14))
+        icon_frame.pack_propagate(False)
+        ctk.CTkLabel(icon_frame, text="🎉", font=ctk.CTkFont(size=22)).place(relx=0.5, rely=0.5, anchor="center")
 
-        title_box = ttk.Frame(hdr_frame)
-        title_box.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        title_box = ctk.CTkFrame(hdr_frame, fg_color="transparent")
+        title_box.pack(side="left", fill="x", expand=True)
 
-        ttk.Label(
+        lbl_title = ctk.CTkLabel(
             title_box, 
             text=f"Знайдено нову версію: {self.update_info.latest_version}", 
-            font=("Segoe UI", 12, "bold"),
-            foreground="#27ae60"
-        ).pack(anchor="w")
+            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
+            text_color=("#10b981", "#34d399")
+        )
+        lbl_title.pack(anchor="w")
 
         size_mb = f"{self.update_info.asset_size / (1024*1024):.1f} МБ" if self.update_info.asset_size else ""
-        ttk.Label(
+        lbl_sub = ctk.CTkLabel(
             title_box, 
-            text=f"Поточна версія: v{self.update_info.current_version}  •  Розмір: {size_mb}", 
-            font=("Segoe UI", 9),
-            foreground="#555555"
-        ).pack(anchor="w")
+            text=f"Поточна версія: v{self.update_info.current_version}  •  Розмір інсталятора: {size_mb}", 
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=("#64748b", "#94a3b8")
+        )
+        lbl_sub.pack(anchor="w")
 
         # 2. Опис релізу (Release Notes)
-        notes_group = ttk.LabelFrame(main_frame, text=" Що нового у цьому релізі ", padding="8")
-        notes_group.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-
-        notes_scroll = ttk.Scrollbar(notes_group)
-        notes_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.notes_text = tk.Text(
-            notes_group,
-            wrap=tk.WORD,
-            height=6,
-            font=("Segoe UI", 9),
-            bg="#fdfefe",
-            fg="#2c3e50",
-            bd=1,
-            relief="solid",
-            yscrollcommand=notes_scroll.set
+        notes_group = ctk.CTkFrame(
+            main_frame, 
+            corner_radius=10, 
+            fg_color=("#f1f5f9", "#111827"),
+            border_color=("#e2e8f0", "#1e293b"),
+            border_width=1
         )
-        self.notes_text.pack(fill=tk.BOTH, expand=True)
-        notes_scroll.config(command=self.notes_text.yview)
+        notes_group.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+
+        lbl_notes_hdr = ctk.CTkLabel(
+            notes_group, 
+            text="📋 Що нового у цьому релізі:", 
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
+        )
+        lbl_notes_hdr.pack(anchor="w", padx=12, pady=(10, 4))
+
+        self.notes_text = ctk.CTkTextbox(
+            notes_group, 
+            height=120, 
+            font=("Segoe UI", 10),
+            corner_radius=8,
+            fg_color=("#ffffff", "#090d16"),
+            border_color=("#cbd5e1", "#1e293b"),
+            border_width=1
+        )
+        self.notes_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
         notes_content = self.update_info.release_notes if self.update_info.release_notes else "Опис змін відсутній."
         self.notes_text.insert("1.0", notes_content)
-        self.notes_text.config(state="disabled")
+        self.notes_text.configure(state="disabled")
 
         # 3. Блок прогресу
-        self.progress_frame = ttk.Frame(main_frame)
-        self.progress_frame.pack(fill=tk.X, pady=(0, 10))
+        self.progress_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        self.progress_frame.pack(fill="x", padx=16, pady=(0, 12))
 
-        self.status_label = ttk.Label(
+        self.status_label = ctk.CTkLabel(
             self.progress_frame, 
-            text="Натисніть 'Оновити зараз' для авто-завантаження.", 
-            font=("Segoe UI", 9)
+            text="Натисніть 'Оновити зараз' для автоматичного завантаження та оновлення.", 
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=("#64748b", "#94a3b8")
         )
         self.status_label.pack(anchor="w", pady=(0, 4))
 
-        self.progress_bar = ttk.Progressbar(self.progress_frame, mode='determinate')
-        self.progress_bar.pack(fill=tk.X)
+        self.progress_bar = ctk.CTkProgressBar(self.progress_frame, mode='determinate', height=8, progress_color="#10b981")
+        self.progress_bar.pack(fill="x", pady=(2, 0))
+        self.progress_bar.set(0)
 
         # 4. Панель кнопок
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        btn_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=16, pady=(0, 16), side="bottom")
 
-        self.btn_cancel = ttk.Button(btn_frame, text="Пізніше", command=self.on_close)
-        self.btn_cancel.pack(side=tk.RIGHT, padx=(6, 0))
+        self.btn_cancel = ctk.CTkButton(
+            btn_frame, 
+            text="Пізніше", 
+            width=90,
+            height=34,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
+            command=self.on_close
+        )
+        self.btn_cancel.pack(side="right", padx=(8, 0))
 
-        self.btn_update = ttk.Button(
+        self.btn_update = ctk.CTkButton(
             btn_frame, 
             text="🚀 Оновити зараз", 
+            width=140,
+            height=34,
+            corner_radius=8,
+            font=ctk.CTkFont(weight="bold"),
+            fg_color=("#10b981", "#059669"),
+            hover_color=("#059669", "#047857"),
             command=self.start_download
         )
-        self.btn_update.pack(side=tk.RIGHT)
+        self.btn_update.pack(side="right")
 
-        btn_github = ttk.Button(
+        btn_github = ctk.CTkButton(
             btn_frame, 
             text="🌐 Відкрити на GitHub", 
+            width=140,
+            fg_color=("gray75", "#27272a"),
+            hover_color=("gray65", "#3f3f46"),
             command=self.open_github_release
         )
-        btn_github.pack(side=tk.LEFT)
+        btn_github.pack(side="left")
 
     def open_github_release(self):
         url = f"https://github.com/Yurii-Li/pyVoice/releases/tag/{self.update_info.latest_version}"
@@ -154,9 +198,9 @@ class UpdateDialog(tk.Toplevel):
             return
 
         self.is_downloading = True
-        self.btn_update.config(state="disabled")
-        self.btn_cancel.config(state="disabled")
-        self.status_label.config(text="Завантаження оновлення... Будь ласка, зачекайте.")
+        self.btn_update.configure(state="disabled")
+        self.btn_cancel.configure(state="disabled")
+        self.status_label.configure(text="Завантаження оновлення... Будь ласка, зачекайте.")
 
         threading.Thread(target=self._download_worker, daemon=True).start()
 
@@ -186,20 +230,21 @@ class UpdateDialog(tk.Toplevel):
             self.after(0, lambda: self._handle_error(str(e)))
 
     def _trigger_restart(self, installer_path: str):
-        self.status_label.config(text="✅ Завантажено 100%! Встановлення та перезапуск...")
+        self.status_label.configure(text="✅ Завантажено 100%! Встановлення та перезапуск...")
         self.update_idletasks()
         # Запускаємо Inno Setup через 300мс і виходимо
         self.after(300, lambda: launch_installer_and_exit(installer_path))
 
     def _update_ui_progress(self, percent: int, downloaded_mb: float, total_mb: float):
-        self.progress_bar['value'] = min(percent, 100)
-        self.status_label.config(text=f"Завантаження: {percent}% ({downloaded_mb:.1f} / {total_mb:.1f} МБ)")
+        fraction = min(percent / 100.0, 1.0)
+        self.progress_bar.set(fraction)
+        self.status_label.configure(text=f"Завантаження: {percent}% ({downloaded_mb:.1f} / {total_mb:.1f} МБ)")
 
     def _handle_error(self, err_msg: str):
         self.is_downloading = False
-        self.btn_update.config(state="normal")
-        self.btn_cancel.config(state="normal")
-        self.status_label.config(text="❌ Помилка під час оновлення.")
+        self.btn_update.configure(state="normal")
+        self.btn_cancel.configure(state="normal")
+        self.status_label.configure(text="❌ Помилка під час оновлення.")
         messagebox.showerror("Помилка оновлення", f"Не вдалося оновити програму:\n{err_msg}")
 
     def on_close(self):

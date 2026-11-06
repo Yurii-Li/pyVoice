@@ -156,3 +156,23 @@ def enable_universal_shortcuts(root: tk.Tk):
             menu.grab_release()
 
     root.bind_all("<Button-3>", show_context_menu, add="+")
+
+def bring_to_front(window, parent=None):
+    """
+    Гарантує, що додаткове вікно (CTkToplevel) надійно з'явиться поверх головного
+    вікна та отримає активний фокус у Windows, уникаючи відкриття на задньому плані.
+    """
+    if parent is not None:
+        try:
+            window.transient(parent)
+        except Exception:
+            pass
+    try:
+        window.lift()
+        window.focus_force()
+        window.attributes("-topmost", True)
+        window.after(120, lambda: window.attributes("-topmost", False))
+        window.after(150, window.lift)
+        window.after(150, window.focus_force)
+    except Exception:
+        pass

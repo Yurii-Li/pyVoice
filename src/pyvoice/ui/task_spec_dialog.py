@@ -1,5 +1,7 @@
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import filedialog, messagebox
+import customtkinter as ctk
+from pyvoice.ui.shortcuts import bring_to_front
 import os
 
 TEMPLATE_TASK_SPEC = """- [x] #### Назва задачі / Фічі (наприклад, Переміщення між складами)
@@ -10,16 +12,16 @@ TEMPLATE_TASK_SPEC = """- [x] #### Назва задачі / Фічі (напр�
   Опис поведінки та вимог...
 """
 
-class TaskSpecDialog(tk.Toplevel):
+class TaskSpecDialog(ctk.CTkToplevel):
     """
-    Зручне вікно для введення, завантаження з файлу та редагування
-    Технічного Завдання (ТЗ), списків завдань, Jira-тікетів, PR-описів або чеклістів.
+    Сучасне вікно на базі CustomTkinter для введення, завантаження з файлу
+    та редагування Технічного Завдання (ТЗ), чеклістів або Jira-тікетів.
     """
     def __init__(self, parent, initial_text: str, on_save_callback):
         super().__init__(parent)
         self.title("📋 Технічне завдання / Опис задачі (ТЗ) - PyVoice AI")
-        self.geometry("820x600")
-        self.minsize(620, 420)
+        self.geometry("860x640")
+        self.minsize(640, 440)
         
         self.parent = parent
         self.on_save_callback = on_save_callback
@@ -27,8 +29,8 @@ class TaskSpecDialog(tk.Toplevel):
         
         # Центруємо вікно відносно батьківського
         try:
-            x = parent.winfo_x() + (parent.winfo_width() // 2) - 410
-            y = parent.winfo_y() + (parent.winfo_height() // 2) - 300
+            x = parent.winfo_x() + (parent.winfo_width() // 2) - 430
+            y = parent.winfo_y() + (parent.winfo_height() // 2) - 320
             self.geometry(f"+{max(0, x)}+{max(0, y)}")
         except Exception:
             pass
@@ -36,163 +38,187 @@ class TaskSpecDialog(tk.Toplevel):
         self.create_widgets(initial_text)
         self.update_stats()
         
-        self.lift()
-        self.focus_force()
+        bring_to_front(self, parent)
 
     def create_widgets(self, initial_text: str):
+        self.configure(fg_color=("#f8fafc", "#090d16"))
+        main_box = ctk.CTkFrame(
+            self, 
+            corner_radius=14,
+            fg_color=("#ffffff", "#0e1424"),
+            border_color=("#e2e8f0", "#1e293b"),
+            border_width=1
+        )
+        main_box.pack(fill="both", expand=True, padx=14, pady=14)
+
         # 1. Верхня панель інструментів (Toolbar)
-        top_bar = ttk.Frame(self, padding="8")
-        top_bar.pack(fill=tk.X)
+        top_bar = ctk.CTkFrame(main_box, fg_color="transparent")
+        top_bar.pack(fill="x", padx=16, pady=(14, 10))
 
-        ttk.Label(
+        title_badge = ctk.CTkFrame(top_bar, width=34, height=34, corner_radius=9, fg_color=("#e0f2fe", "#082f49"))
+        title_badge.pack(side="left", padx=(0, 10))
+        title_badge.pack_propagate(False)
+        ctk.CTkLabel(title_badge, text="📋", font=ctk.CTkFont(size=16)).place(relx=0.5, rely=0.5, anchor="center")
+
+        ctk.CTkLabel(
             top_bar, 
-            text="📋 Технічне завдання / Контекст задачі", 
-            font=("Segoe UI", 11, "bold")
-        ).pack(side=tk.LEFT)
+            text="Технічне завдання / Опис контексту", 
+            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
+            text_color=("gray10", "white")
+        ).pack(side="left")
 
-        btn_apply = ttk.Button(
+        btn_apply = ctk.CTkButton(
             top_bar, 
             text="💾 Застосувати", 
+            width=120,
+            height=32,
+            corner_radius=8,
+            font=ctk.CTkFont(weight="bold"),
+            fg_color=("#10b981", "#059669"),
+            hover_color=("#059669", "#047857"),
             command=self.apply_changes
         )
-        btn_apply.pack(side=tk.RIGHT, padx=(6, 0))
+        btn_apply.pack(side="right", padx=(6, 0))
 
-        btn_clear = ttk.Button(
+        btn_clear = ctk.CTkButton(
             top_bar, 
             text="🧹 Очистити", 
+            width=90,
+            height=32,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
             command=self.clear_text
         )
-        btn_clear.pack(side=tk.RIGHT, padx=(6, 0))
+        btn_clear.pack(side="right", padx=(6, 0))
 
-        btn_template = ttk.Button(
+        btn_template = ctk.CTkButton(
             top_bar, 
             text="📝 Шаблон ТЗ", 
+            width=110,
+            height=32,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
             command=self.insert_template
         )
-        btn_template.pack(side=tk.RIGHT, padx=(6, 0))
+        btn_template.pack(side="right", padx=(6, 0))
 
-        btn_save = ttk.Button(
+        btn_save = ctk.CTkButton(
             top_bar, 
-            text="💾 Зберегти у файл", 
+            text="💾 Зберегти", 
+            width=90,
+            height=32,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
             command=self.save_to_file
         )
-        btn_save.pack(side=tk.RIGHT, padx=(6, 0))
+        btn_save.pack(side="right", padx=(6, 0))
 
-        btn_open = ttk.Button(
+        btn_open = ctk.CTkButton(
             top_bar, 
-            text="📂 Відкрити файл", 
+            text="📂 Відкрити", 
+            width=90,
+            height=32,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
             command=self.open_file
         )
-        btn_open.pack(side=tk.RIGHT, padx=(6, 0))
+        btn_open.pack(side="right")
 
         # 2. Інформаційний банер підказок
-        self.banner_frame = tk.Frame(self, bg="#eef2f7", padx=10, pady=5)
-        self.banner_frame.pack(fill=tk.X)
+        banner_frame = ctk.CTkFrame(
+            main_box, 
+            corner_radius=8, 
+            fg_color=("#f1f5f9", "#111827"),
+            border_color=("#e2e8f0", "#1e293b"),
+            border_width=1
+        )
+        banner_frame.pack(fill="x", padx=16, pady=(0, 10))
 
-        self.banner_label = tk.Label(
-            self.banner_frame, 
+        banner_label = ctk.CTkLabel(
+            banner_frame, 
             text="💡 Сюди можна просто скопіювати список задач, чекліст із беклогу чи короткі технічні нотатки. ШІ сам визначить, яка саме задача показана у відео, та використає її терміни й логіку для точної озвучки.", 
-            font=("Segoe UI", 9),
-            bg="#eef2f7",
-            fg="#2c3e50",
-            anchor="w",
-            wraplength=780,
-            justify=tk.LEFT
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=("#475569", "#94a3b8"),
+            wraplength=800,
+            justify="left"
         )
-        self.banner_label.pack(fill=tk.X)
+        banner_label.pack(fill="x", padx=14, pady=8)
 
-        # 3. Текстове поле
-        edit_frame = ttk.Frame(self, padding="8")
-        edit_frame.pack(fill=tk.BOTH, expand=True)
-
-        scrollbar = ttk.Scrollbar(edit_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.text_widget = tk.Text(
-            edit_frame, 
-            wrap=tk.WORD, 
+        # 3. Текстове поле ТЗ
+        self.text_widget = ctk.CTkTextbox(
+            main_box, 
+            wrap="word", 
             undo=True,
-            font=("Segoe UI", 10),
-            bg="#ffffff",
-            fg="#111111",
-            insertbackground="#000000",
-            selectbackground="#cce8ff",
-            selectforeground="#000000",
-            relief="solid",
-            borderwidth=1,
-            padx=10,
-            pady=10,
-            yscrollcommand=scrollbar.set
+            font=("Segoe UI", 11),
+            corner_radius=10,
+            fg_color=("#f8fafc", "#090d16"),
+            border_color=("#cbd5e1", "#1e293b"),
+            border_width=1
         )
-        self.text_widget.pack(fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.text_widget.yview)
-
-        # Вставляємо початковий текст
-        if initial_text:
-            self.text_widget.insert("1.0", initial_text)
+        self.text_widget.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+        self.text_widget.insert("1.0", initial_text)
 
         # 4. Нижня панель статистики
-        bottom_bar = ttk.Frame(self, padding="8")
-        bottom_bar.pack(fill=tk.X)
+        bottom_bar = ctk.CTkFrame(main_box, fg_color="transparent")
+        bottom_bar.pack(fill="x", padx=14, pady=(0, 10))
 
-        self.stats_label = ttk.Label(
+        self.stats_label = ctk.CTkLabel(
             bottom_bar, 
-            text="Символів: 0 | Слів: 0 | Рядків: 0", 
-            font=("Segoe UI", 9, "bold")
+            text="Символів: 0 | Слів: 0", 
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
         )
-        self.stats_label.pack(side=tk.LEFT)
+        self.stats_label.pack(side="left")
 
-        hint_label = ttk.Label(
+        hint_lbl = ctk.CTkLabel(
             bottom_bar, 
-            text="Ctrl+Z: Відмінити  •  Ctrl+A: Виділити все", 
-            font=("Segoe UI", 8),
-            foreground="#666666"
+            text="Ctrl+A: Виділити все • Ctrl+C / Ctrl+V: Копіювати / Вставити", 
+            font=ctk.CTkFont(family="Segoe UI", size=10),
+            text_color=("gray50", "gray60")
         )
-        hint_label.pack(side=tk.RIGHT)
+        hint_lbl.pack(side="right")
 
-        # Події для оновлення статистики
-        self.text_widget.bind("<<Modified>>", self.on_text_modified)
         self.text_widget.bind("<KeyRelease>", lambda e: self.update_stats())
 
-    def on_text_modified(self, event=None):
-        if self.text_widget.edit_modified():
-            self.update_stats()
-            self.text_widget.edit_modified(False)
-
-    def show_banner(self, message: str, msg_type: str = "info"):
-        colors = {
-            "info": ("#eef2f7", "#2c3e50"),
-            "success": ("#d4edda", "#155724"),
-            "warning": ("#fff3cd", "#856404"),
-            "error": ("#f8d7da", "#721c24")
-        }
-        bg, fg = colors.get(msg_type, ("#eef2f7", "#2c3e50"))
-        self.banner_frame.config(bg=bg)
-        self.banner_label.config(text=message, bg=bg, fg=fg)
-
     def update_stats(self):
-        content = self.text_widget.get("1.0", tk.END).strip()
-        char_count = len(content)
-        word_count = len(content.split()) if content else 0
-        line_count = len(content.splitlines()) if content else 0
+        content = self.text_widget.get("1.0", "end").strip()
+        chars = len(content)
+        words = len(content.split())
+        self.stats_label.configure(text=f"Символів: {chars:,} | Слів: {words:,}")
 
-        self.stats_label.config(
-            text=f"Символів: {char_count:,} | Слів: {word_count:,} | Рядків: {line_count:,}"
-        )
-
-    def insert_template(self):
-        content = self.text_widget.get("1.0", tk.END).strip()
-        if content:
-            self.text_widget.insert(tk.END, "\n\n" + TEMPLATE_TASK_SPEC)
-        else:
-            self.text_widget.insert("1.0", TEMPLATE_TASK_SPEC)
-        self.update_stats()
-        self.show_banner("📝 Шаблон структури ТЗ вставлено.", "info")
+    def apply_changes(self):
+        content = self.text_widget.get("1.0", "end").strip()
+        self.on_save_callback(content)
+        self.destroy()
 
     def clear_text(self):
-        self.text_widget.delete("1.0", tk.END)
+        if messagebox.askyesno("Очищення", "Ви дійсно бажаєте очистити текст ТЗ?", parent=self):
+            self.text_widget.delete("1.0", "end")
+            self.update_stats()
+
+    def insert_template(self):
+        content = self.text_widget.get("1.0", "end").strip()
+        if content:
+            if not messagebox.askyesno("Шаблон ТЗ", "Замінити поточний текст шаблоном?", parent=self):
+                return
+        self.text_widget.delete("1.0", "end")
+        self.text_widget.insert("1.0", TEMPLATE_TASK_SPEC)
         self.update_stats()
-        self.show_banner("🧹 Поле ТЗ очищено.", "info")
 
     def open_file(self):
         filename = filedialog.askopenfilename(
@@ -202,40 +228,29 @@ class TaskSpecDialog(tk.Toplevel):
                 ("Усі файли", "*.*")
             ]
         )
-        self.lift()
-        self.focus_force()
         if filename:
             try:
                 with open(filename, "r", encoding="utf-8", errors="replace") as f:
                     data = f.read()
-                self.text_widget.delete("1.0", tk.END)
+                self.text_widget.delete("1.0", "end")
                 self.text_widget.insert("1.0", data)
                 self.update_stats()
-                self.show_banner(f"📂 Завантажено файл: {os.path.basename(filename)}", "success")
             except Exception as e:
-                self.show_banner(f"❌ Помилка відкриття файлу: {str(e)}", "error")
+                messagebox.showerror("Помилка", f"Не вдалося відкрити файл:\n{str(e)}")
 
     def save_to_file(self):
-        content = self.text_widget.get("1.0", tk.END).strip()
+        content = self.text_widget.get("1.0", "end").strip()
         if not content:
-            self.show_banner("⚠️ Немає тексту для збереження.", "warning")
+            messagebox.showwarning("Увага", "Текстове поле порожнє!", parent=self)
             return
         filename = filedialog.asksaveasfilename(
             parent=self, 
-            defaultextension=".md", 
-            filetypes=[("Markdown файл", "*.md"), ("Текстовий файл", "*.txt"), ("Усі файли", "*.*")]
+            defaultextension=".txt", 
+            filetypes=[("Текстовий файл (*.txt)", "*.txt"), ("Markdown (*.md)", "*.md")]
         )
-        self.lift()
-        self.focus_force()
         if filename:
             try:
                 with open(filename, "w", encoding="utf-8") as f:
                     f.write(content)
-                self.show_banner(f"💾 ТЗ збережено у: {os.path.basename(filename)}", "success")
             except Exception as e:
-                self.show_banner(f"❌ Не вдалося зберегти файл: {str(e)}", "error")
-
-    def apply_changes(self):
-        content = self.text_widget.get("1.0", tk.END).strip()
-        self.on_save_callback(content)
-        self.destroy()
+                messagebox.showerror("Помилка", f"Не вдалося зберегти файл:\n{str(e)}")

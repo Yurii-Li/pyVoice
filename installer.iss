@@ -2,7 +2,7 @@
 ; PyVoice AI - Windows Installer Script
 
 #define MyAppName "PyVoice AI"
-#define MyAppVersion "1.5.0"
+#define MyAppVersion "1.6.0"
 #define MyAppPublisher "Yurii Liubuskyi"
 #define MyAppURL "https://github.com/Yurii-Li/pyVoice"
 #define MyAppExeName "PyVoiceAI.exe"

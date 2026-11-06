@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox
+import customtkinter as ctk
 import threading
 import asyncio
 import os
@@ -15,36 +16,40 @@ from pyvoice.ui.log_viewer import LogViewerWindow
 from pyvoice.ui.fallback_dialog import VoiceFallbackDialog
 from pyvoice.ui.script_editor import ScriptEditorWindow
 from pyvoice.ui.task_spec_dialog import TaskSpecDialog
-from pyvoice.ui.video_tools_window import TimelineVideoEditorWindow, VideoToolsWindow
+from pyvoice.ui.video_tools_window import TimelineVideoEditorWindow
 from pyvoice.ui.shortcuts import enable_universal_shortcuts
 from pyvoice.ui.update_dialog import UpdateDialog
 from pyvoice.core.updater import check_for_updates
 from pyvoice import __version__
 
-class PyVoiceApp(tk.Tk):
+# Налаштування сучасної темної теми CustomTkinter
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+class PyVoiceApp(ctk.CTk):
+    """
+    Головне вікно PyVoice AI з ультрасучасним інтерфейсом CustomTkinter
+    у стилі Windows 11 / Dark Mode: заокруглені картки, неонові акценти,
+    зручні тумблери та вбудована анімація.
+    """
     def __init__(self):
         super().__init__()
         self.title("PyVoice AI - Авто-Озвучка дій у відео зі стоп-кадрами")
-        self.minsize(680, 520)
+        self.minsize(720, 560)
         
-        # Центрування вікна на екрані з безпечними розмірами
+        # Центрування вікна на екрані
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
-        width = min(760, max(680, screen_w - 60))
-        height = min(680, max(520, screen_h - 90))
+        width = min(820, max(720, screen_w - 60))
+        height = min(740, max(560, screen_h - 80))
         x = max(0, (screen_w - width) // 2)
-        y = max(0, (screen_h - height - 60) // 2)
+        y = max(0, (screen_h - height - 40) // 2)
         self.geometry(f"{width}x{height}+{x}+{y}")
-        
-        # Тема оформлення
-        style = ttk.Style(self)
-        if "clam" in style.theme_names():
-            style.theme_use('clam')
-            
-        # Універсальні гарячі клавіші (Ctrl+V, Ctrl+C, Ctrl+A тощо) для української розкладки + контекстне меню
+
+        # Універсальні гарячі клавіші (Ctrl+V, Ctrl+C, Ctrl+A) для української розкладки
         enable_universal_shortcuts(self)
             
-        # Змінні
+        # Змінні даних
         self.api_key_var = tk.StringVar(value=load_api_key())
         self.input_video_path = tk.StringVar()
         self.output_video_path = tk.StringVar()
@@ -65,10 +70,11 @@ class PyVoiceApp(tk.Tk):
         self.status_var = tk.StringVar(value="🟢 Готовий до роботи")
         self.log_history = []
         self.log_window = None
+        self.is_key_visible = False
         
         self.create_widgets()
         
-        # Автоматичне збереження API ключа при введенні / вставці
+        # Автоматичне збереження API ключа при введенні
         self.api_key_var.trace_add("write", lambda *a: save_api_key(self.api_key_var.get()))
 
         # Тиха перевірка оновлень при запуску через 2 секунди
@@ -77,125 +83,326 @@ class PyVoiceApp(tk.Tk):
     def open_api_key_url(self):
         webbrowser.open("https://aistudio.google.com/app/apikey")
 
+    def toggle_theme(self):
+        """Перемикає тему оформлення (Dark / Light)"""
+        current = ctk.get_appearance_mode()
+        new_mode = "Light" if current == "Dark" else "Dark"
+        ctk.set_appearance_mode(new_mode)
+        self.btn_theme.configure(text="🌙 Темна" if new_mode == "Light" else "☀️ Світла")
+
+    def _create_step_header(self, card, step_num: str, title: str, subtitle: str, bg_color: tuple, text_color: tuple):
+        """Створює стильний уніфікований заголовок кроку із заокругленим номером-бейджів"""
+        hdr = ctk.CTkFrame(card, fg_color="transparent")
+        hdr.pack(fill="x", padx=16, pady=(14, 10))
+
+        badge = ctk.CTkFrame(hdr, width=34, height=34, corner_radius=9, fg_color=bg_color)
+        badge.pack(side="left", padx=(0, 12))
+        badge.pack_propagate(False)
+
+        ctk.CTkLabel(
+            badge, 
+            text=step_num, 
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            text_color=text_color
+        ).place(relx=0.5, rely=0.5, anchor="center")
+
+        tbox = ctk.CTkFrame(hdr, fg_color="transparent")
+        tbox.pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(
+            tbox, 
+            text=title, 
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            text_color=("gray10", "white")
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            tbox, 
+            text=subtitle, 
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=("#64748b", "#94a3b8")
+        ).pack(anchor="w")
+
     def create_widgets(self):
+        # Встановлюємо глибокий преміальний фоновий колір
+        self.configure(fg_color=("#f8fafc", "#090d16"))
+
         # -------------------------------------------------------------
-        # СЕКЦІЯ 5: Закріплений знизу Status Bar (завжди видимий)
+        # 1. Верхня шапка додатку (Header Bar) у стилі Fluent / SaaS
         # -------------------------------------------------------------
-        status_bar = ttk.Frame(self, padding="5", relief="groove")
-        status_bar.pack(fill=tk.X, side=tk.BOTTOM)
-        
-        status_bar.bind("<Double-Button-1>", lambda e: self.open_log_window())
+        header_frame = ctk.CTkFrame(
+            self, 
+            height=62, 
+            corner_radius=0, 
+            fg_color=("#ffffff", "#0e1424"),
+            border_color=("#e2e8f0", "#1e293b"),
+            border_width=1
+        )
+        header_frame.pack(fill="x", side="top")
 
-        self.progress_bar = ttk.Progressbar(status_bar, mode='indeterminate', length=110)
-        self.progress_bar.pack(side=tk.RIGHT, padx=(8, 0))
+        title_box = ctk.CTkFrame(header_frame, fg_color="transparent")
+        title_box.pack(side="left", padx=18, pady=8)
 
-        btn_open_logs = ttk.Button(status_bar, text="📜 Журнал логів", command=self.open_log_window)
-        btn_open_logs.pack(side=tk.RIGHT, padx=(4, 0))
+        text_col = ctk.CTkFrame(title_box, fg_color="transparent")
+        text_col.pack(side="left")
 
-        self.btn_update_check = ttk.Button(
+        title_row = ctk.CTkFrame(text_col, fg_color="transparent")
+        title_row.pack(anchor="w")
+
+        lbl_app = ctk.CTkLabel(
+            title_row, 
+            text="🎙️ PyVoice AI", 
+            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
+            text_color=("gray10", "white")
+        )
+        lbl_app.pack(side="left")
+
+        # Версійний бейдж
+        ver_badge = ctk.CTkFrame(title_row, corner_radius=6, fg_color=("#e0f2fe", "#082f49"))
+        ver_badge.pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(
+            ver_badge, 
+            text=f"v{__version__}", 
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color=("#0284c7", "#38bdf8")
+        ).pack(padx=6, pady=1)
+
+        lbl_sub = ctk.CTkLabel(
+            text_col, 
+            text="Розумна авто-озвучка дій у відео зі стоп-кадрами", 
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=("#64748b", "#94a3b8")
+        )
+        lbl_sub.pack(anchor="w")
+
+        # Панель дій праворуч
+        right_box = ctk.CTkFrame(header_frame, fg_color="transparent")
+        right_box.pack(side="right", padx=16, pady=10)
+
+        # Перемикач теми
+        self.btn_theme = ctk.CTkButton(
+            right_box, 
+            text="☀️ Світла" if ctk.get_appearance_mode() == "Dark" else "🌙 Темна", 
+            width=92, 
+            height=30,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
+            command=self.toggle_theme
+        )
+        self.btn_theme.pack(side="left")
+
+        # -------------------------------------------------------------
+        # 2. Закріплений знизу Status Bar
+        # -------------------------------------------------------------
+        status_bar = ctk.CTkFrame(
+            self, 
+            height=44, 
+            corner_radius=0, 
+            fg_color=("#ffffff", "#0e1424"),
+            border_color=("#e2e8f0", "#1e293b"),
+            border_width=1
+        )
+        status_bar.pack(fill="x", side="bottom")
+
+        self.progress_bar = ctk.CTkProgressBar(status_bar, mode="indeterminate", width=110, height=8, progress_color="#38bdf8")
+        self.progress_bar.pack(side="right", padx=(8, 16), pady=14)
+        self.progress_bar.set(0)
+
+        btn_open_logs = ctk.CTkButton(
             status_bar, 
-            text=f"🔄 v{__version__}", 
+            text="📜 Журнал логів", 
+            width=115, 
+            height=28,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
+            command=self.open_log_window
+        )
+        btn_open_logs.pack(side="right", padx=(4, 0), pady=8)
+
+        self.btn_update_check = ctk.CTkButton(
+            status_bar, 
+            text=f"🔄 Оновлення", 
+            width=110, 
+            height=28,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
             command=lambda: self.check_updates_background(manual=True)
         )
-        self.btn_update_check.pack(side=tk.RIGHT, padx=(4, 0))
+        self.btn_update_check.pack(side="right", padx=(4, 0), pady=8)
 
-        self.status_label = ttk.Label(
-            status_bar, 
+        status_badge = ctk.CTkFrame(status_bar, fg_color=("#f1f5f9", "#111827"), corner_radius=8, border_width=1, border_color=("#e2e8f0", "#1e293b"))
+        status_badge.pack(side="left", fill="x", expand=True, padx=(14, 8), pady=6)
+
+        self.status_label = ctk.CTkLabel(
+            status_badge, 
             textvariable=self.status_var, 
-            font=("Segoe UI", 9, "bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=("#0f172a", "#f1f5f9"),
             anchor="w",
             cursor="hand2"
         )
-        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.status_label.pack(side="left", fill="x", expand=True, padx=10, pady=2)
         self.status_label.bind("<Double-Button-1>", lambda e: self.open_log_window())
-        
-        hint_label = ttk.Label(
-            status_bar, 
-            text=" (двічі клікніть для деталей)", 
-            font=("Segoe UI", 8, "italic"),
-            foreground="#888888"
+
+        # -------------------------------------------------------------
+        # 3. Головний скролований контейнер із сучасними картками
+        # -------------------------------------------------------------
+        self.main_scroll = ctk.CTkScrollableFrame(self, corner_radius=0, fg_color="transparent")
+        self.main_scroll.pack(fill="both", expand=True, padx=14, pady=(8, 6))
+
+        # =============================================================
+        # КАРТКА 1: Налаштування ШІ-Сценариста
+        # =============================================================
+        card_ai = ctk.CTkFrame(
+            self.main_scroll, 
+            corner_radius=14, 
+            fg_color=("#ffffff", "#111827"),
+            border_color=("#e2e8f0", "#1e293b"),
+            border_width=1
         )
-        hint_label.pack(side=tk.LEFT)
-        hint_label.bind("<Double-Button-1>", lambda e: self.open_log_window())
+        card_ai.pack(fill="x", pady=(0, 12), padx=4)
 
-        # -------------------------------------------------------------
-        # Скролований контейнер для всіх налаштувань та секцій
-        # -------------------------------------------------------------
-        scroll_container = ttk.Frame(self)
-        scroll_container.pack(fill=tk.BOTH, expand=True)
+        self._create_step_header(
+            card_ai, 
+            "01", 
+            "ШІ-Сценарист & Контекст завдання", 
+            "Google Gemini Vision аналізує запис екрану та генерує таймкоди й текст",
+            bg_color=("#e0e7ff", "#1e1b4b"),
+            text_color=("#4338ca", "#818cf8")
+        )
 
-        self.canvas = tk.Canvas(scroll_container, highlightthickness=0, borderwidth=0)
-        v_scrollbar = ttk.Scrollbar(scroll_container, orient=tk.VERTICAL, command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=v_scrollbar.set)
-
-        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        main_frame = ttk.Frame(self.canvas, padding="10")
-        self.canvas_window = self.canvas.create_window((0, 0), window=main_frame, anchor="nw")
-
-        def _on_frame_configure(event):
-            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
-        def _on_canvas_configure(event):
-            self.canvas.itemconfig(self.canvas_window, width=event.width)
-
-        main_frame.bind("<Configure>", _on_frame_configure)
-        self.canvas.bind("<Configure>", _on_canvas_configure)
-
-        def _on_mousewheel(event):
-            widget = event.widget
-            # Якщо курсор над Text-віджетом сценарію, дозволяємо його власний скрол
-            if isinstance(widget, tk.Text):
-                return
-            if self.canvas.winfo_exists() and self.canvas.yview() != (0.0, 1.0):
-                self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        self.bind_all("<MouseWheel>", _on_mousewheel, add="+")
-
-        # -------------------------------------------------------------
-        # СЕКЦІЯ 1: Налаштування ШІ та Стилю озвучки
-        # -------------------------------------------------------------
-        ai_group = ttk.LabelFrame(main_frame, text=" 1. Налаштування ШІ-Сценариста (Google Gemini Vision) ", padding="8")
-        ai_group.pack(fill=tk.X, pady=(0, 6))
+        grid_ai = ctk.CTkFrame(card_ai, fg_color="transparent")
+        grid_ai.pack(fill="x", padx=16, pady=(0, 14))
+        grid_ai.columnconfigure(1, weight=1)
 
         # Рядок 0: API Key
-        ttk.Label(ai_group, text="Gemini API Key:").grid(row=0, column=0, sticky="w", pady=2)
-        self.api_entry = ttk.Entry(ai_group, textvariable=self.api_key_var, show="*", width=34)
-        self.api_entry.grid(row=0, column=1, padx=5, pady=2, sticky="we")
+        ctk.CTkLabel(grid_ai, text="Gemini API Key:", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, sticky="w", pady=5, padx=(0, 10))
+        
+        key_box = ctk.CTkFrame(grid_ai, fg_color="transparent")
+        key_box.grid(row=0, column=1, columnspan=3, sticky="we", pady=5)
+        key_box.columnconfigure(0, weight=1)
 
-        btn_get_key = ttk.Button(ai_group, text="🔑 Отримати ключ", command=self.open_api_key_url)
-        btn_get_key.grid(row=0, column=2, padx=5, pady=2)
+        self.api_entry = ctk.CTkEntry(
+            key_box, 
+            textvariable=self.api_key_var, 
+            show="*", 
+            placeholder_text="Вставте ваш ключ Google Gemini API...",
+            height=34,
+            corner_radius=8,
+            fg_color=("#f8fafc", "#090d16"),
+            border_color=("#cbd5e1", "#1e293b"),
+            border_width=1
+        )
+        self.api_entry.grid(row=0, column=0, sticky="we", padx=(0, 6))
 
-        self.show_key_var = tk.BooleanVar(value=False)
-        def toggle_key_visibility():
-            self.api_entry.config(show="" if self.show_key_var.get() else "*")
-        ttk.Checkbutton(ai_group, text="Показати", variable=self.show_key_var, command=toggle_key_visibility).grid(row=0, column=3, padx=2)
+        self.btn_show_key = ctk.CTkButton(
+            key_box, 
+            text="👁️", 
+            width=36, 
+            height=34,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
+            command=self.toggle_key_visibility
+        )
+        self.btn_show_key.grid(row=0, column=1, padx=(0, 6))
+
+        btn_get_key = ctk.CTkButton(
+            key_box, 
+            text="🔑 Отримати ключ", 
+            width=130, 
+            height=34,
+            corner_radius=8,
+            fg_color=("#4f46e5", "#4338ca"),
+            hover_color=("#4338ca", "#3730a3"),
+            font=ctk.CTkFont(weight="bold"),
+            command=self.open_api_key_url
+        )
+        btn_get_key.grid(row=0, column=2)
 
         # Рядок 1: Тема / Контекст відео
-        ttk.Label(ai_group, text="Про що відео / Контекст:").grid(row=1, column=0, sticky="w", pady=2)
-        entry_topic = ttk.Entry(ai_group, textvariable=self.video_topic_var, width=45)
-        entry_topic.grid(row=1, column=1, columnspan=3, padx=5, pady=2, sticky="we")
-
-        # Рядок 2: Технічне завдання / Опис задачі (ТЗ)
-        ttk.Label(ai_group, text="Технічне завдання (ТЗ):").grid(row=2, column=0, sticky="w", pady=2)
-        tz_frame = ttk.Frame(ai_group)
-        tz_frame.grid(row=2, column=1, columnspan=3, padx=5, pady=2, sticky="we")
-
-        ttk.Button(tz_frame, text="📋 Редагувати ТЗ...", command=self.open_task_spec_editor).pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Button(tz_frame, text="📂 Завантажити з файлу...", command=self.browse_task_spec_file).pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Button(tz_frame, text="❌", width=3, command=self.clear_task_spec).pack(side=tk.LEFT, padx=(0, 6))
-
-        self.task_spec_status_label = ttk.Label(
-            tz_frame, 
-            text="⚪ ТЗ не додано", 
-            font=("Segoe UI", 8, "italic"),
-            foreground="#666666"
+        ctk.CTkLabel(grid_ai, text="Контекст відео:", font=ctk.CTkFont(weight="bold")).grid(row=1, column=0, sticky="w", pady=5, padx=(0, 10))
+        entry_topic = ctk.CTkEntry(
+            grid_ai, 
+            textvariable=self.video_topic_var, 
+            placeholder_text="Наприклад: Інструкція як налаштувати права доступу користувачів...",
+            height=34,
+            corner_radius=8,
+            fg_color=("#f8fafc", "#090d16"),
+            border_color=("#cbd5e1", "#1e293b"),
+            border_width=1
         )
-        self.task_spec_status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        entry_topic.grid(row=1, column=1, columnspan=3, sticky="we", pady=5)
 
-        # Рядок 3: Стиль коментатора
-        ttk.Label(ai_group, text="Стиль подачі:").grid(row=3, column=0, sticky="w", pady=2)
+        # Рядок 2: Технічне завдання (ТЗ)
+        ctk.CTkLabel(grid_ai, text="Технічне завдання:", font=ctk.CTkFont(weight="bold")).grid(row=2, column=0, sticky="w", pady=5, padx=(0, 10))
+        tz_box = ctk.CTkFrame(grid_ai, fg_color="transparent")
+        tz_box.grid(row=2, column=1, columnspan=3, sticky="we", pady=5)
+
+        ctk.CTkButton(
+            tz_box, 
+            text="📋 Редагувати ТЗ...", 
+            width=135, 
+            height=32,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
+            command=self.open_task_spec_editor
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            tz_box, 
+            text="📂 З файлу...", 
+            width=100, 
+            height=32,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
+            command=self.browse_task_spec_file
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            tz_box, 
+            text="❌", 
+            width=34, 
+            height=32,
+            corner_radius=8,
+            fg_color=("#ef4444", "#dc2626"),
+            hover_color=("#dc2626", "#b91c1c"),
+            command=self.clear_task_spec
+        ).pack(side="left", padx=(0, 10))
+
+        self.task_spec_status_label = ctk.CTkLabel(
+            tz_box, 
+            text="⚪ ТЗ не додано", 
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=("gray50", "gray60")
+        )
+        self.task_spec_status_label.pack(side="left", fill="x", expand=True)
+
+        # Рядок 3: Стиль подачі
+        ctk.CTkLabel(grid_ai, text="Стиль подачі:", font=ctk.CTkFont(weight="bold")).grid(row=3, column=0, sticky="w", pady=5, padx=(0, 10))
         styles = [
             "Детальний туторіал (з привітанням, поясненням суті та користі дій)",
             "Блогерський розмовний стиль (живі емоції, динаміка, звернення до глядачів)",
@@ -203,76 +410,267 @@ class PyVoiceApp(tk.Tk):
             "Лаконічний опис дій (лише факти та кроки)",
             "Власний стиль"
         ]
-        style_cb = ttk.Combobox(ai_group, textvariable=self.style_var, values=styles, state="normal", width=42)
-        style_cb.grid(row=3, column=1, columnspan=3, padx=5, pady=2, sticky="we")
+        self.style_menu = ctk.CTkOptionMenu(
+            grid_ai, 
+            values=styles, 
+            variable=self.style_var,
+            height=34,
+            corner_radius=8,
+            fg_color=("#f8fafc", "#1e293b"),
+            button_color=("#4f46e5", "#3730a3"),
+            button_hover_color=("#4338ca", "#312e81"),
+            dropdown_fg_color=("#ffffff", "#111827"),
+            dropdown_hover_color=("#f1f5f9", "#1e293b"),
+            text_color=("#0f172a", "#f8fafc"),
+            dynamic_resizing=False
+        )
+        self.style_menu.grid(row=3, column=1, columnspan=3, sticky="we", pady=5)
 
-        # Рядок 4: Додаткові опції (Чекбокси)
-        opts_frame = ttk.Frame(ai_group)
-        opts_frame.grid(row=4, column=0, columnspan=4, sticky="we", pady=3)
-        
-        ttk.Checkbutton(opts_frame, text="👋 Привітання на початку (00:01)", variable=self.include_intro_var).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Checkbutton(opts_frame, text="💡 Пояснювати призначення та користь функцій", variable=self.explain_purpose_var).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Checkbutton(opts_frame, text="🏁 Підсумок у кінці", variable=self.include_outro_var).pack(side=tk.LEFT)
+        # Рядок 4: Сучасні тумблери (Switches)
+        switches_box = ctk.CTkFrame(grid_ai, fg_color="transparent")
+        switches_box.grid(row=4, column=0, columnspan=4, sticky="we", pady=(8, 5))
+
+        ctk.CTkSwitch(
+            switches_box, 
+            text="👋 Привітання на початку (00:01)", 
+            variable=self.include_intro_var,
+            progress_color="#3b82f6",
+            switch_width=40,
+            switch_height=20
+        ).pack(side="left", padx=(0, 18))
+
+        ctk.CTkSwitch(
+            switches_box, 
+            text="💡 Пояснювати користь функцій", 
+            variable=self.explain_purpose_var,
+            progress_color="#3b82f6",
+            switch_width=40,
+            switch_height=20
+        ).pack(side="left", padx=(0, 18))
+
+        ctk.CTkSwitch(
+            switches_box, 
+            text="🏁 Підсумок у кінці", 
+            variable=self.include_outro_var,
+            progress_color="#3b82f6",
+            switch_width=40,
+            switch_height=20
+        ).pack(side="left")
 
         # Рядок 5: Додаткові побажання
-        ttk.Label(ai_group, text="Додаткові побажання:").grid(row=5, column=0, sticky="w", pady=2)
-        entry_notes = ttk.Entry(ai_group, textvariable=self.custom_notes_var, width=45)
-        entry_notes.grid(row=5, column=1, columnspan=3, padx=5, pady=2, sticky="we")
+        ctk.CTkLabel(grid_ai, text="Додаткові побажання:", font=ctk.CTkFont(weight="bold")).grid(row=5, column=0, sticky="w", pady=5, padx=(0, 10))
+        entry_notes = ctk.CTkEntry(
+            grid_ai, 
+            textvariable=self.custom_notes_var, 
+            placeholder_text="Наприклад: Звертай увагу на нові фільтри у таблиці...",
+            height=34,
+            corner_radius=8,
+            fg_color=("#f8fafc", "#090d16"),
+            border_color=("#cbd5e1", "#1e293b"),
+            border_width=1
+        )
+        entry_notes.grid(row=5, column=1, columnspan=3, sticky="we", pady=5)
 
-        ai_group.columnconfigure(1, weight=1)
+        # =============================================================
+        # КАРТКА 2: Вибір відео та запуск ШІ-Аналізу
+        # =============================================================
+        card_video = ctk.CTkFrame(
+            self.main_scroll, 
+            corner_radius=14, 
+            fg_color=("#ffffff", "#111827"),
+            border_color=("#e2e8f0", "#1e293b"),
+            border_width=1
+        )
+        card_video.pack(fill="x", pady=(0, 12), padx=4)
 
-        # -------------------------------------------------------------
-        # СЕКЦІЯ 2: Відеофайли та Аналіз
-        # -------------------------------------------------------------
-        video_group = ttk.LabelFrame(main_frame, text=" 2. Вибір відео та запуск ШІ-Аналізу ", padding="8")
-        video_group.pack(fill=tk.X, pady=(0, 6))
+        self._create_step_header(
+            card_video, 
+            "02", 
+            "Вхідне відео та Підготовка монтажу", 
+            "Оберіть вихідне відео або відкрийте вбудований візуальний відеомонтажер",
+            bg_color=("#e0f2fe", "#082f49"),
+            text_color=("#0284c7", "#38bdf8")
+        )
 
-        v_row = ttk.Frame(video_group)
-        v_row.pack(fill=tk.X, pady=(0, 4))
+        v_row = ctk.CTkFrame(card_video, fg_color="transparent")
+        v_row.pack(fill="x", padx=16, pady=(0, 12))
 
-        ttk.Label(v_row, text="Вхідне відео:").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Entry(v_row, textvariable=self.input_video_path).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        ttk.Button(v_row, text="Огляд...", command=self.browse_video).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(v_row, text="Редактор відео", command=self.open_video_tools).pack(side=tk.LEFT)
+        ctk.CTkLabel(v_row, text="Вхідне відео:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0, 10))
+        
+        self.entry_input_vid = ctk.CTkEntry(
+            v_row, 
+            textvariable=self.input_video_path, 
+            placeholder_text="Оберіть відеофайл запису екрану...",
+            height=36,
+            corner_radius=8,
+            fg_color=("#f8fafc", "#090d16"),
+            border_color=("#cbd5e1", "#1e293b"),
+            border_width=1
+        )
+        self.entry_input_vid.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        self.btn_analyze = ttk.Button(
-            video_group, 
-            text="👁️ Проаналізувати дії у відео через ШІ (Скласти розгорнутий сценарій)", 
+        ctk.CTkButton(
+            v_row, 
+            text="📂 Огляд...", 
+            width=95, 
+            height=36,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
+            command=self.browse_video
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            v_row, 
+            text="🎬 Відео-монтажер", 
+            width=135, 
+            height=36,
+            corner_radius=8,
+            fg_color=("#8b5cf6", "#7c3aed"),
+            hover_color=("#7c3aed", "#6d28d9"),
+            font=ctk.CTkFont(weight="bold"),
+            command=self.open_video_tools
+        ).pack(side="left")
+
+        self.btn_analyze = ctk.CTkButton(
+            card_video, 
+            text="✨ Проаналізувати дії у відео через ШІ (Скласти сценарій озвучки)", 
+            height=44,
+            corner_radius=10,
+            fg_color=("#4f46e5", "#4338ca"),
+            hover_color=("#4338ca", "#3730a3"),
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
             command=self.start_ai_analysis
         )
-        self.btn_analyze.pack(fill=tk.X, pady=(2, 0))
+        self.btn_analyze.pack(fill="x", padx=16, pady=(0, 16))
 
-        # -------------------------------------------------------------
-        # СЕКЦІЯ 3: Редактор сценарію / таймкодів
-        # -------------------------------------------------------------
-        script_group = ttk.LabelFrame(main_frame, text=" 3. Сценарій озвучки з таймкодами (можна редагувати перед монтажем) ", padding="8")
-        script_group.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+        # =============================================================
+        # КАРТКА 3: Сценарій озвучки з таймкодами
+        # =============================================================
+        card_script = ctk.CTkFrame(
+            self.main_scroll, 
+            corner_radius=14, 
+            fg_color=("#ffffff", "#111827"),
+            border_color=("#e2e8f0", "#1e293b"),
+            border_width=1
+        )
+        card_script.pack(fill="both", expand=True, pady=(0, 12), padx=4)
 
-        btn_toolbar = ttk.Frame(script_group)
-        btn_toolbar.pack(fill=tk.X, pady=(0, 4))
-        
-        btn_expand = ttk.Button(
-            btn_toolbar, 
-            text="⛶ Великий редактор", 
+        s_top = ctk.CTkFrame(card_script, fg_color="transparent")
+        s_top.pack(fill="x", padx=16, pady=(14, 8))
+
+        # Зліва заголовок кроку 3
+        badge3 = ctk.CTkFrame(s_top, width=34, height=34, corner_radius=9, fg_color=("#ede9fe", "#2e1065"))
+        badge3.pack(side="left", padx=(0, 12))
+        badge3.pack_propagate(False)
+
+        ctk.CTkLabel(
+            badge3, 
+            text="03", 
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            text_color=("#7c3aed", "#c084fc")
+        ).place(relx=0.5, rely=0.5, anchor="center")
+
+        tbox3 = ctk.CTkFrame(s_top, fg_color="transparent")
+        tbox3.pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(
+            tbox3, 
+            text="Сценарій озвучки з таймкодами", 
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            text_color=("gray10", "white")
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            tbox3, 
+            text="Переглядайте, редагуйте репліки або відкрийте картковий редактор", 
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=("#64748b", "#94a3b8")
+        ).pack(anchor="w")
+
+        # Кнопки управління сценарієм праворуч
+        btn_expand = ctk.CTkButton(
+            s_top, 
+            text="🗂️ Великий картковий редактор", 
+            width=190, 
+            height=32,
+            font=ctk.CTkFont(weight="bold"),
+            corner_radius=8,
+            fg_color=("#7c3aed", "#6d28d9"),
+            hover_color=("#6d28d9", "#5b21b6"),
             command=self.open_script_editor
         )
-        btn_expand.pack(side=tk.LEFT, padx=(0, 5))
+        btn_expand.pack(side="right")
 
-        ttk.Button(btn_toolbar, text="📂 Відкрити JSON", command=self.load_json_file).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(btn_toolbar, text="💾 Зберегти JSON", command=self.save_json_file).pack(side=tk.LEFT)
-        ttk.Label(btn_toolbar, text="Формат: [{\"start\": \"00:00\", \"text\": \"...\"}] (2 кліки для збільшення)", font=("Segoe UI", 8, "italic")).pack(side=tk.RIGHT)
+        ctk.CTkButton(
+            s_top, 
+            text="💾 Зберегти", 
+            width=85, 
+            height=32,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
+            command=self.save_json_file
+        ).pack(side="right", padx=(0, 6))
 
-        self.script_text = tk.Text(script_group, height=6, wrap=tk.WORD, font=("Consolas", 10))
-        self.script_text.pack(fill=tk.BOTH, expand=True)
+        ctk.CTkButton(
+            s_top, 
+            text="📂 Відкрити", 
+            width=85, 
+            height=32,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
+            command=self.load_json_file
+        ).pack(side="right", padx=(0, 6))
+
+        self.script_text = ctk.CTkTextbox(
+            card_script, 
+            height=125, 
+            font=("Consolas", 11),
+            corner_radius=8,
+            fg_color=("#f8fafc", "#090d16"),
+            border_color=("#cbd5e1", "#1e293b"),
+            border_width=1
+        )
+        self.script_text.pack(fill="both", expand=True, padx=16, pady=(0, 14))
         self.script_text.bind("<Double-Button-1>", lambda e: self.open_script_editor())
 
-        # -------------------------------------------------------------
-        # СЕКЦІЯ 4: Озвучка та Фінальний рендер
-        # -------------------------------------------------------------
-        render_group = ttk.LabelFrame(main_frame, text=" 4. Озвучення та Синхронізація стоп-кадрів ", padding="8")
-        render_group.pack(fill=tk.X, pady=(0, 6))
+        # =============================================================
+        # КАРТКА 4: Озвучення та Фінальний рендер
+        # =============================================================
+        card_render = ctk.CTkFrame(
+            self.main_scroll, 
+            corner_radius=14, 
+            fg_color=("#ffffff", "#111827"),
+            border_color=("#e2e8f0", "#1e293b"),
+            border_width=1
+        )
+        card_render.pack(fill="x", pady=(0, 12), padx=4)
 
-        ttk.Label(render_group, text="Голос та Рушій:").grid(row=0, column=0, sticky="w", pady=2)
+        self._create_step_header(
+            card_render, 
+            "04", 
+            "Синтез голосу & Синхронізація стоп-кадрів", 
+            "Оберіть природний ШІ-голос і згенеруйте фінальне синхронізоване відео",
+            bg_color=("#d1fae5", "#064e3b"),
+            text_color=("#059669", "#34d399")
+        )
+
+        grid_r = ctk.CTkFrame(card_render, fg_color="transparent")
+        grid_r.pack(fill="x", padx=16, pady=(0, 16))
+        grid_r.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(grid_r, text="Голос та Рушій:", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, sticky="w", pady=5, padx=(0, 10))
         voices = [
             "Edge-TTS: Остап (🔥 Живий / Динамічний)",
             "Edge-TTS: Поліна (🔥 Жива / Динамічна)",
@@ -284,29 +682,73 @@ class PyVoiceApp(tk.Tk):
             "Google Gemini AI: Kore (🌟 Чітка ШІ-Дикторка)",
             "Google Gemini AI: Fenrir (🌟 Впевнений ШІ-Голос)"
         ]
-        
-        voice_cb = ttk.Combobox(render_group, textvariable=self.voice_var, values=voices, state="readonly", width=42)
-        voice_cb.grid(row=0, column=1, columnspan=2, padx=5, pady=2, sticky="we")
+        self.voice_menu = ctk.CTkOptionMenu(
+            grid_r, 
+            values=voices, 
+            variable=self.voice_var,
+            height=36,
+            corner_radius=8,
+            fg_color=("#f8fafc", "#1e293b"),
+            button_color=("#059669", "#047857"),
+            button_hover_color=("#047857", "#065f46"),
+            dropdown_fg_color=("#ffffff", "#111827"),
+            dropdown_hover_color=("#f1f5f9", "#1e293b"),
+            text_color=("#0f172a", "#f8fafc"),
+            dynamic_resizing=False
+        )
+        self.voice_menu.grid(row=0, column=1, columnspan=2, sticky="we", pady=5)
 
-        ttk.Label(render_group, text="Куди зберегти відео:").grid(row=1, column=0, sticky="w", pady=2)
-        ttk.Entry(render_group, textvariable=self.output_video_path, width=45).grid(row=1, column=1, padx=5, pady=2, sticky="we")
-        ttk.Button(render_group, text="Огляд...", command=self.browse_output).grid(row=1, column=2, pady=2)
+        ctk.CTkLabel(grid_r, text="Куди зберегти:", font=ctk.CTkFont(weight="bold")).grid(row=1, column=0, sticky="w", pady=5, padx=(0, 10))
+        self.entry_out_vid = ctk.CTkEntry(
+            grid_r, 
+            textvariable=self.output_video_path,
+            placeholder_text="Шлях для збереження змонтованого відео...",
+            height=36,
+            corner_radius=8,
+            fg_color=("#f8fafc", "#090d16"),
+            border_color=("#cbd5e1", "#1e293b"),
+            border_width=1
+        )
+        self.entry_out_vid.grid(row=1, column=1, sticky="we", pady=5, padx=(0, 6))
 
-        self.btn_render = ttk.Button(
-            render_group, 
-            text="🎬 Створити фінальне відео зі стоп-кадрами та озвучкою", 
+        ctk.CTkButton(
+            grid_r, 
+            text="📂 Огляд...", 
+            width=95, 
+            height=36,
+            corner_radius=8,
+            fg_color=("#f1f5f9", "#1e293b"),
+            hover_color=("#e2e8f0", "#334155"),
+            text_color=("#0f172a", "#f1f5f9"),
+            border_width=1,
+            border_color=("#cbd5e1", "#334155"),
+            command=self.browse_output
+        ).grid(row=1, column=2, pady=5)
+
+        # Велика головна кнопка запуску рендеру (смарагдовий градієнтний вигляд)
+        self.btn_render = ctk.CTkButton(
+            grid_r, 
+            text="🚀 Створити фінальне відео зі стоп-кадрами та озвучкою", 
+            height=48,
+            corner_radius=12,
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            fg_color=("#059669", "#059669"),
+            hover_color=("#047857", "#047857"),
             command=self.start_rendering
         )
-        self.btn_render.grid(row=2, column=0, columnspan=3, pady=(6, 2), sticky="we")
+        self.btn_render.grid(row=2, column=0, columnspan=3, pady=(12, 0), sticky="we")
 
-        render_group.columnconfigure(1, weight=1)
+    def toggle_key_visibility(self):
+        """Перемикає видимість символів API ключа"""
+        self.is_key_visible = not self.is_key_visible
+        self.api_entry.configure(show="" if self.is_key_visible else "*")
+        self.btn_show_key.configure(text="🔒" if self.is_key_visible else "👁️")
 
     def open_task_spec_editor(self):
-        """Відкриває повнорозмірне вікно редагування та налаштування Технічного Завдання (ТЗ)"""
+        """Відкриває повнорозмірне вікно редагування Технічного Завдання (ТЗ)"""
         TaskSpecDialog(self, self.task_spec_text, self.on_task_spec_saved)
 
     def on_task_spec_saved(self, new_text: str):
-        """Зберігає оновлений текст ТЗ та оновлює статус у головному вікні"""
         self.task_spec_text = new_text.strip()
         self.update_task_spec_ui()
         if self.task_spec_text:
@@ -317,7 +759,6 @@ class PyVoiceApp(tk.Tk):
             self.log_message("📋 Технічне завдання очищено.")
 
     def browse_task_spec_file(self):
-        """Завантажує файл ТЗ напряму з диску"""
         filename = filedialog.askopenfilename(
             filetypes=[
                 ("Текстові та Markdown файли", "*.txt *.md *.markdown *.json *.yaml *.yml *.log *.docx"),
@@ -334,30 +775,26 @@ class PyVoiceApp(tk.Tk):
                 messagebox.showerror("Помилка", f"Не вдалося відкрити файл ТЗ:\n{str(e)}")
 
     def clear_task_spec(self):
-        """Очищує прикріплене ТЗ"""
         self.task_spec_text = ""
         self.update_task_spec_ui()
         self.log_message("📋 Технічне завдання видалено.")
 
     def update_task_spec_ui(self):
-        """Оновлює індикатор статусу ТЗ у головному вікні"""
         if self.task_spec_text:
             chars = len(self.task_spec_text)
             words = len(self.task_spec_text.split())
-            self.task_spec_status_label.config(
+            self.task_spec_status_label.configure(
                 text=f"🟢 ТЗ активно ({chars:,} симв., {words:,} слів)",
-                foreground="#1b7a2b"
+                text_color=("#10b981", "#34d399")
             )
         else:
-            self.task_spec_status_label.config(
+            self.task_spec_status_label.configure(
                 text="⚪ ТЗ не додано",
-                foreground="#777777"
+                text_color=("gray50", "gray60")
             )
 
     def open_script_editor(self):
-        """Відкриває повнорозмірне модальне вікно для зручного редагування та валідації JSON"""
         content = self.script_text.get("1.0", tk.END).strip()
-        
         def on_save(new_content: str):
             self.script_text.delete("1.0", tk.END)
             self.script_text.insert("1.0", new_content)
@@ -366,25 +803,21 @@ class PyVoiceApp(tk.Tk):
         ScriptEditorWindow(self, content, on_save)
 
     def open_video_tools(self):
-        """Відкриває повноцінний візуальний відеомонтажер з таймлайном"""
         init_path = self.input_video_path.get().strip()
         TimelineVideoEditorWindow(self, initial_video_path=init_path, on_use_video_callback=self.on_video_tools_result)
 
     def on_video_tools_result(self, video_path: str):
-        """Встановлює оброблене відео як вхідне для ШІ"""
         self.input_video_path.set(video_path)
         self.log_message(f"📹 Встановлено змонтоване відео: {os.path.basename(video_path)}")
 
     def open_log_window(self):
-        """Відкриває або активує модальне/окреме вікно логів"""
         if self.log_window is not None and self.log_window.winfo_exists():
-            self.log_window.lift()
-            self.log_window.focus_force()
+            from pyvoice.ui.shortcuts import bring_to_front
+            bring_to_front(self.log_window, self)
         else:
             self.log_window = LogViewerWindow(self, self.log_history)
 
     def prompt_voice_fallback(self, error_message: str, current_voice: str) -> Optional[str]:
-        """Показує інтерактивне діалогове вікно вибору альтернативного голосу (Thread-Safe)"""
         result = {"chosen_voice": None}
         event = threading.Event()
 
@@ -399,15 +832,14 @@ class PyVoiceApp(tk.Tk):
         return result["chosen_voice"]
 
     def log_message(self, message: str):
-        """Оновлює рядок статусу в головному вікні та надсилає повідомлення у вікно логів"""
         now_str = datetime.datetime.now().strftime("%H:%M:%S")
         full_entry = f"[{now_str}] {message}"
         self.log_history.append(full_entry)
         
         def _update():
             clean_status = message.replace("\n", " ")
-            if len(clean_status) > 70:
-                clean_status = clean_status[:67] + "..."
+            if len(clean_status) > 75:
+                clean_status = clean_status[:72] + "..."
             self.status_var.set(clean_status)
             
             if self.log_window is not None and self.log_window.winfo_exists():
@@ -457,13 +889,14 @@ class PyVoiceApp(tk.Tk):
 
     def set_ui_busy(self, busy: bool):
         def _set():
-            state = tk.DISABLED if busy else tk.NORMAL
-            self.btn_analyze.config(state=state)
-            self.btn_render.config(state=state)
+            state = "disabled" if busy else "normal"
+            self.btn_analyze.configure(state=state)
+            self.btn_render.configure(state=state)
             if busy:
-                self.progress_bar.start(10)
+                self.progress_bar.start()
             else:
                 self.progress_bar.stop()
+                self.progress_bar.set(0)
         self.after(0, _set)
 
     def start_ai_analysis(self):
@@ -519,7 +952,7 @@ class PyVoiceApp(tk.Tk):
             def update_text():
                 self.script_text.delete("1.0", tk.END)
                 self.script_text.insert(tk.END, formatted_json)
-                messagebox.showinfo("Успіх", f"ШІ успішно проаналізував відео та склав {len(items)} розгорнутих реплік!\nПерегляньте сценарій у Секції 3 або відкрийте великий редактор.")
+                messagebox.showinfo("Успіх", f"ШІ успішно проаналізував відео та склав {len(items)} розгорнутих реплік!\nПерегляньте сценарій або відкрийте картковий редактор.")
 
             self.after(0, update_text)
 
@@ -588,7 +1021,7 @@ class PyVoiceApp(tk.Tk):
         except Exception as e:
             error_str = str(e)
             if "скасовано" in error_str.lower():
-                self.log_message(f"🛑 Монтаж зупинено користувачем.")
+                self.log_message("🛑 Монтаж зупинено користувачем.")
             else:
                 self.log_message(f"❌ ПОМИЛКА МОНТАЖУ: {error_str}")
                 self.after(0, lambda: messagebox.showerror("Помилка монтажу", error_str))
@@ -596,9 +1029,8 @@ class PyVoiceApp(tk.Tk):
             self.set_ui_busy(False)
 
     def check_updates_background(self, manual: bool = False):
-        """Перевіряє оновлення у фоновому потоці, щоб інтерфейс не зависав"""
         if manual:
-            self.btn_update_check.config(text="🔄 Перевірка...", state="disabled")
+            self.btn_update_check.configure(text="🔄 Перевірка...", state="disabled")
 
         def _worker():
             try:
@@ -610,10 +1042,13 @@ class PyVoiceApp(tk.Tk):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_check_updates_complete(self, update_info, manual: bool):
-        self.btn_update_check.config(text=f"🔄 v{__version__}", state="normal")
+        self.btn_update_check.configure(text=f"🔄 v{__version__}", state="normal")
         if update_info.has_update:
-            self.btn_update_check.config(text=f"🚀 Оновити ({update_info.latest_version})")
-            # Відкриваємо модальне вікно оновлення
+            self.btn_update_check.configure(
+                text=f"🚀 Оновити ({update_info.latest_version})",
+                fg_color=("#10b981", "#059669"),
+                hover_color=("#059669", "#047857")
+            )
             UpdateDialog(self, update_info)
         else:
             if manual:
@@ -623,10 +1058,9 @@ class PyVoiceApp(tk.Tk):
                 )
 
     def _on_check_updates_error(self, err_msg: str, manual: bool):
-        self.btn_update_check.config(text=f"🔄 v{__version__}", state="normal")
+        self.btn_update_check.configure(text=f"🔄 v{__version__}", state="normal")
         if manual:
             messagebox.showwarning(
                 "Перевірка оновлень", 
                 f"Не вдалося перевірити оновлення на GitHub:\n{err_msg}"
             )
-
