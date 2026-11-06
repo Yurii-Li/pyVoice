@@ -1,10 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-import os
 from PyInstaller.utils.hooks import collect_all
 
-ROOT_DIR = os.path.abspath(SPECPATH)
-
-datas = [('bin', 'bin')]
+datas = [('D:/web/python/pyVoice/bin', 'bin')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('edge_tts')
@@ -16,8 +13,8 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['run.py'],
-    pathex=['src'],
+    ['D:/web/python/pyVoice/run.py'],
+    pathex=['D:/web/python/pyVoice/src'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

@@ -39,10 +39,20 @@ jobs:
       run: |
         pyinstaller PyVoiceAI.spec
 
-    - name: Create GitHub Release and Upload EXE
+    - name: Install Inno Setup
+      run: |
+        choco install innosetup -y --no-progress
+
+    - name: Compile Inno Setup Installer
+      run: |
+        & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" installer.iss
+
+    - name: Create GitHub Release and Upload Binaries
       uses: softprops/action-gh-release@v2
       with:
-        files: dist/PyVoiceAI.exe
+        files: |
+          dist/PyVoiceAI-Setup.exe
+          dist/PyVoiceAI.exe
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

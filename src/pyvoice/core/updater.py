@@ -19,6 +19,7 @@ class UpdateInfo:
     download_url: Optional[str]
     asset_name: Optional[str]
     asset_size: int
+    is_setup: bool
 
 def parse_version_tuple(v_str: str) -> Tuple[int, ...]:
     clean = v_str.strip().lstrip("vV")
@@ -32,6 +33,10 @@ def parse_version_tuple(v_str: str) -> Tuple[int, ...]:
     return tuple(parts)
 
 def check_for_updates(current_version: str) -> UpdateInfo:
+    """
+    Перевіряє наявність новішого релізу на GitHub Releases.
+    Надає перевагу офіційному інсталятору Inno Setup (PyVoiceAI-Setup.exe).
+    """
     headers = {"User-Agent": "PyVoiceAI-Updater"}
     res = requests.get(GITHUB_API_LATEST, headers=headers, timeout=10)
     if res.status_code != 200:
@@ -46,17 +51,24 @@ def check_for_updates(current_version: str) -> UpdateInfo:
 
     has_update = latest_tuple > curr_tuple
 
-    download_url = None
-    asset_name = None
-    asset_size = 0
+    # Шукаємо спочатку Setup інсталятор (Inno Setup), якщо немає — звичайний .exe
+    setup_asset = None
+    fallback_exe = None
 
     for asset in data.get("assets", []):
         name = asset.get("name", "")
         if name.lower().endswith(".exe"):
-            download_url = asset.get("browser_download_url")
-            asset_name = name
-            asset_size = asset.get("size", 0)
-            break
+            if "setup" in name.lower():
+                setup_asset = asset
+                break
+            elif not fallback_exe:
+                fallback_exe = asset
+
+    chosen = setup_asset or fallback_exe
+    download_url = chosen.get("browser_download_url") if chosen else None
+    asset_name = chosen.get("name") if chosen else None
+    asset_size = chosen.get("size", 0) if chosen else 0
+    is_setup = "setup" in (asset_name or "").lower()
 
     return UpdateInfo(
         has_update=has_update,
@@ -65,7 +77,8 @@ def check_for_updates(current_version: str) -> UpdateInfo:
         release_notes=release_notes,
         download_url=download_url,
         asset_name=asset_name,
-        asset_size=asset_size
+        asset_size=asset_size,
+        is_setup=is_setup
     )
 
 def download_update_file(
@@ -73,7 +86,7 @@ def download_update_file(
     target_path: str,
     progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> None:
-    """Завантажує файл релізу частинами з оновленням прогресу"""
+    """Завантажує файл оновлення частинами з відстеженням прогресу"""
     headers = {"User-Agent": "PyVoiceAI-Updater"}
     with requests.get(download_url, headers=headers, stream=True, timeout=180) as resp:
         resp.raise_for_status()
@@ -88,63 +101,26 @@ def download_update_file(
                     if progress_callback and total_length > 0:
                         progress_callback(downloaded, total_length)
 
-def launch_updater_and_exit(new_exe_path: str, current_exe: str, pid: int) -> None:
+def launch_installer_and_exit(installer_path: str) -> None:
     """
-    Запускає надійний автономний батник у Windows cmd.exe,
-    який очікує завершення процесу PyVoiceAI, замінює EXE і запускає нову версію.
+    Запускає офіційний Inno Setup інсталятор у тихому режимі:
+    Inno Setup автоматично:
+    1. Закриває старий процес PyVoiceAI (Restart Manager)
+    2. Оновлює файли та ярлики у {localappdata}\\Programs\\PyVoice AI
+    3. Автоматично запускає оновлену програму
     """
-    temp_dir = os.path.dirname(new_exe_path)
-    bat_path = os.path.join(temp_dir, "run_update.bat")
-
-    # Батник cmd.exe працює на будь-якому Windows без обмежень ExecutionPolicy чи блокувань PowerShell
-    bat_script = f"""@echo off
-setlocal
-set "PID={pid}"
-set "OLD_EXE={current_exe}"
-set "NEW_EXE={new_exe_path}"
-set "TMP_DIR={temp_dir}"
-
-:: 1. Чекаємо поки старий процес завершиться
-:WAIT_LOOP
-tasklist /fi "PID eq %PID%" 2>nul | find "%PID%" >nul
-if not errorlevel 1 (
-    timeout /t 1 /nobreak >nul
-    goto WAIT_LOOP
-)
-
-:: Коротка пауза, щоб Windows повністю звільнила дескриптор файлу
-timeout /t 1 /nobreak >nul
-
-:: 2. Заміна старого файлу новим із повторними спробами
-:COPY_LOOP
-copy /y "%NEW_EXE%" "%OLD_EXE%" >nul 2>&1
-if errorlevel 1 (
-    timeout /t 1 /nobreak >nul
-    goto COPY_LOOP
-)
-
-:: 3. Запуск оновленої програми
-start "" "%OLD_EXE%"
-
-:: 4. Очищення тимчасових файлів
-del /f /q "%NEW_EXE%" >nul 2>&1
-(goto) 2>nul & del "%~f0"
-exit
-"""
-
-    with open(bat_path, "w", encoding="cp1251") as f:
-        f.write(bat_script)
-
-    # Запускаємо cmd.exe повністю від'єднаним від поточного процесу (CREATE_NEW_PROCESS_GROUP + DETACHED)
     flags = 0
     if sys.platform == "win32":
         flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
 
+    # Запускаємо Inno Setup з прапорцями тихого оновлення та закриття старих процесів
+    cmd = [installer_path, "/SILENT", "/CLOSEAPPLICATIONS"]
+
     subprocess.Popen(
-        ["cmd.exe", "/c", bat_path],
+        cmd,
         creationflags=flags,
         close_fds=True
     )
 
-    # Миттєвий вихід з процесу на рівні ядра ОС
+    # Завершуємо поточну програму
     os._exit(0)

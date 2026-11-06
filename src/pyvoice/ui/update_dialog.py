@@ -6,7 +6,7 @@ import os
 import tempfile
 import webbrowser
 from typing import Optional
-from pyvoice.core.updater import UpdateInfo, download_update_file, launch_updater_and_exit
+from pyvoice.core.updater import UpdateInfo, download_update_file, launch_installer_and_exit
 
 class UpdateDialog(tk.Toplevel):
     """
@@ -14,7 +14,7 @@ class UpdateDialog(tk.Toplevel):
     - Показує поточну та нову версії
     - Відображає список змін (Release Notes)
     - Має плавний прогрес-бар завантаження
-    - Автоматично замінює та перезапускає програму
+    - Автоматично оновлює додаток через Inno Setup
     """
     def __init__(self, parent, update_info: UpdateInfo):
         super().__init__(parent)
@@ -138,7 +138,7 @@ class UpdateDialog(tk.Toplevel):
         if not self.update_info.download_url:
             messagebox.showerror(
                 "Помилка", 
-                "У цьому релізі на GitHub відсутній зібраний файл .exe.\nВи можете завантажити його вручну на сторінці релізів."
+                "У цьому релізі на GitHub відсутній інсталятор .exe.\nВи можете завантажити його вручну на сторінці релізів."
             )
             self.open_github_release()
             return
@@ -147,7 +147,7 @@ class UpdateDialog(tk.Toplevel):
             # Режим розробки (.py)
             res = messagebox.askyesno(
                 "Режим розробки",
-                "Ви зараз запускаєте програму через Python (.py), а не через .exe!\nАвтозаміна працює лише для зібраного .exe файлу.\n\nВідкрити сторінку релізу на GitHub для завантаження?"
+                "Ви зараз запускаєте програму через Python (.py), а не через встановлений .exe!\nАвтооновлення призначене для встановленої програми.\n\nВідкрити сторінку релізу на GitHub для завантаження?"
             )
             if res:
                 self.open_github_release()
@@ -162,10 +162,9 @@ class UpdateDialog(tk.Toplevel):
 
     def _download_worker(self):
         try:
-            temp_dir = tempfile.mkdtemp(prefix="pyvoice_upd_")
-            new_exe_path = os.path.join(temp_dir, "PyVoiceAI_new.exe")
-            current_exe = os.path.abspath(sys.executable)
-            pid = os.getpid()
+            temp_dir = tempfile.mkdtemp(prefix="pyvoice_inno_")
+            installer_name = self.update_info.asset_name or "PyVoiceAI-Setup.exe"
+            installer_path = os.path.join(temp_dir, installer_name)
 
             def on_progress(downloaded: int, total: int):
                 pct = int((downloaded / total) * 100) if total > 0 else 0
@@ -173,24 +172,24 @@ class UpdateDialog(tk.Toplevel):
                 mb_total = total / (1024 * 1024)
                 self.after(0, lambda: self._update_ui_progress(pct, mb_down, mb_total))
 
-            # 1. Завантаження у фоновому потоці
+            # 1. Завантаження інсталятора Inno Setup
             download_update_file(
                 self.update_info.download_url,
-                target_path=new_exe_path,
+                target_path=installer_path,
                 progress_callback=on_progress
             )
 
-            # 2. Повідомляємо інтерфейс про успішне завантаження і передаємо керування на заміну
-            self.after(0, lambda: self._trigger_restart(new_exe_path, current_exe, pid))
+            # 2. Повідомляємо інтерфейс і запускаємо інсталяцію
+            self.after(0, lambda: self._trigger_restart(installer_path))
 
         except Exception as e:
             self.after(0, lambda: self._handle_error(str(e)))
 
-    def _trigger_restart(self, new_exe_path: str, current_exe: str, pid: int):
-        self.status_label.config(text="✅ Завантажено 100%! Перезапуск оновленої програми...")
+    def _trigger_restart(self, installer_path: str):
+        self.status_label.config(text="✅ Завантажено 100%! Встановлення та перезапуск...")
         self.update_idletasks()
-        # Запускаємо процес оновлення через 300мс і миттєво виходимо
-        self.after(300, lambda: launch_updater_and_exit(new_exe_path, current_exe, pid))
+        # Запускаємо Inno Setup через 300мс і виходимо
+        self.after(300, lambda: launch_installer_and_exit(installer_path))
 
     def _update_ui_progress(self, percent: int, downloaded_mb: float, total_mb: float):
         self.progress_bar['value'] = min(percent, 100)
